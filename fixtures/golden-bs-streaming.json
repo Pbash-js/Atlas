@@ -1,0 +1,603 @@
+{
+  "atlas_version": "1",
+  "id": "atlas_bs_streaming",
+  "goal": {
+    "statement": "Build a real-time Black-Scholes options pricing pipeline on Tradier + Spark Structured Streaming",
+    "terminal_capability": "Stream a Tradier option chain, price every contract with Black-Scholes, and account for where the model diverges from the market",
+    "created": "2026-08-16"
+  },
+  "nodes": [
+    {
+      "id": "n_options_basics",
+      "type": "UNIT",
+      "kind": "concept",
+      "title": "What an option contract is",
+      "why": "Every row in your stream is one contract. Without this the chain is an unreadable wall of numbers.",
+      "status": "passed",
+      "estimate_min": 45,
+      "attempts": 1,
+      "exit_check": {
+        "evidence": "explain",
+        "prompt": "State what a European call gives its holder the right to do, and name the four contract terms that fully specify it.",
+        "rubric": [
+          "states a right to buy at the strike on expiry, not an obligation",
+          "names underlying, strike, expiry and option type",
+          "distinguishes the buyer's position from the writer's"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "confuses the option premium with the strike", "cause": "both are prices, but one is paid now and one is the exercise level" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_moneyness_payoff",
+      "type": "UNIT",
+      "kind": "concept",
+      "title": "Payoff and moneyness",
+      "why": "You need the payoff line before a theoretical price means anything to you.",
+      "status": "passed",
+      "estimate_min": 45,
+      "attempts": 1,
+      "exit_check": {
+        "evidence": "solve",
+        "prompt": "For a call struck at 100, compute the expiry payoff at spot 80, 100 and 120, and sketch the payoff line.",
+        "rubric": [
+          "payoffs computed as max(S-K, 0), giving 0, 0 and 20",
+          "sketch is flat below the strike and rises at 45 degrees above it",
+          "marks break-even at strike plus premium, not at the strike"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "draws break-even at the strike", "cause": "the premium paid up front is left out of the payoff" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_bs_assumptions",
+      "type": "UNIT",
+      "kind": "concept",
+      "title": "Black-Scholes inputs and assumptions",
+      "why": "The final node of this graph asks you where the model breaks. This is where you find out what it assumed.",
+      "status": "ready",
+      "estimate_min": 60,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "explain",
+        "prompt": "List the five inputs to Black-Scholes and name two assumptions the model makes that real markets violate.",
+        "rubric": [
+          "names spot, strike, time to expiry, risk-free rate and volatility",
+          "names constant volatility as an assumption markets violate",
+          "names lognormal returns or costless continuous hedging as a second violated assumption"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "counts the option price as a sixth input", "cause": "price is the output; it becomes an input only when solving for implied volatility" }
+      ],
+      "resources": [
+        {
+          "url": "https://en.wikipedia.org/wiki/Black%E2%80%93Scholes_model",
+          "kind": "text",
+          "title": "Black-Scholes model",
+          "minutes": 30,
+          "cost": 0,
+          "verified": null,
+          "status": "unverified"
+        }
+      ],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_bs_formula",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Implement Black-Scholes in Python",
+      "why": "This function is the engine the whole pipeline exists to run.",
+      "status": "locked",
+      "estimate_min": 90,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Write bs_price(S, K, T, r, sigma, kind) and match a reference implementation to four decimals on ten random inputs.",
+        "rubric": [
+          "d1 and d2 are computed correctly",
+          "call and put branches are both implemented",
+          "output matches a reference to 4 decimals on 10 random inputs",
+          "returns intrinsic value at T=0 instead of raising"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "put prices come out negative", "cause": "sign error in put-call parity, or N(-d) written as -N(d)" },
+        { "symptom": "division by zero at expiry", "cause": "sigma * sqrt(T) is a denominator and T reaches 0" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_greeks",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Delta and vega",
+      "why": "Vega is the derivative your implied-volatility solver needs, so this is a prerequisite disguised as a side quest.",
+      "status": "locked",
+      "estimate_min": 75,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Return delta and vega analytically from your pricer, then verify both against a finite-difference approximation.",
+        "rubric": [
+          "delta returns N(d1) for a call",
+          "vega is identical for a call and a put at the same strike",
+          "analytic values match finite differences to 3 decimals"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "vega is out by a factor of 100", "cause": "vega per one volatility point versus per unit of volatility" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_iv",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Implied volatility by Newton-Raphson",
+      "why": "Market quotes carry a price, not a volatility. Inverting the model is how you compare like with like.",
+      "status": "locked",
+      "estimate_min": 90,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Solve for implied volatility using your vega, and recover sigma from a price your own pricer produced.",
+        "rubric": [
+          "iterates using vega rather than bisecting blindly",
+          "recovers the input sigma to 4 decimals on a round trip",
+          "caps iterations and returns NaN instead of looping forever on non-convergence"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "solver diverges on deep out-of-the-money contracts", "cause": "vega approaches zero there, so the Newton step explodes" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_tradier_auth",
+      "type": "UNIT",
+      "kind": "task",
+      "title": "Tradier sandbox auth and a first quote",
+      "why": "Cheapest possible proof that you can reach the data at all, before any Spark exists.",
+      "status": "passed",
+      "estimate_min": 40,
+      "attempts": 1,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Get a Tradier sandbox token and pull a single equity quote from the command line.",
+        "rubric": [
+          "token is read from an environment variable rather than pasted into the source",
+          "a quote request returns HTTP 200 with a parseable body",
+          "prints the last traded price for one symbol"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "401 despite a valid-looking token", "cause": "sandbox and production tokens are not interchangeable across hosts" }
+      ],
+      "resources": [
+        {
+          "url": "https://documentation.tradier.com/brokerage-api/markets/get-quotes",
+          "kind": "docs",
+          "title": "Tradier — get quotes",
+          "minutes": 15,
+          "cost": 0,
+          "verified": null,
+          "status": "unverified"
+        }
+      ],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_option_chain",
+      "type": "UNIT",
+      "kind": "task",
+      "title": "Pull a full option chain",
+      "why": "The chain is the actual shape of your input data, and it is much wider than a quote.",
+      "status": "in_progress",
+      "estimate_min": 50,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Pull a full option chain for one underlying and one expiry, then count the contracts returned.",
+        "rubric": [
+          "the request carries an expiration parameter",
+          "the response is parsed into rows carrying strike, bid, ask and option type",
+          "the row count equals the number of strikes times two"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "only calls come back", "cause": "the chain endpoint was filtered by option type without noticing" }
+      ],
+      "resources": [
+        {
+          "url": "https://documentation.tradier.com/brokerage-api/markets/get-options-chains",
+          "kind": "docs",
+          "title": "Tradier — get option chains",
+          "minutes": 20,
+          "cost": 0,
+          "verified": null,
+          "status": "unverified"
+        }
+      ],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_rate_limits",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Rate limits and backoff",
+      "why": "Polling a chain every few seconds hits the limit within a session, and a dead poller silently starves the stream.",
+      "status": "ready",
+      "estimate_min": 45,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Make your client survive a 429 by backing off, and show the retry succeeding in a log.",
+        "rubric": [
+          "reads the rate-limit headers on each response",
+          "backs off exponentially with jitter rather than sleeping a fixed interval",
+          "a log shows a 429 followed by a successful retry"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "retries stampede after an outage", "cause": "fixed backoff without jitter synchronises every client" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_spark_df",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Spark DataFrame basics",
+      "why": "Everything downstream is a DataFrame operation; streaming only changes where the rows come from.",
+      "status": "passed",
+      "estimate_min": 90,
+      "attempts": 1,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Load a CSV of option quotes, filter to one expiry, and aggregate contract counts by strike.",
+        "rubric": [
+          "the schema is declared explicitly rather than inferred",
+          "filter and groupBy produce the expected row count",
+          "explain() output is pasted, showing the physical plan"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "schema inference silently types strikes as strings", "cause": "inferSchema on mixed CSV columns falls back to string" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_structured_streaming",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "readStream and writeStream",
+      "why": "This is the smallest thing that is genuinely a stream rather than a loop around a batch job.",
+      "status": "passed",
+      "estimate_min": 90,
+      "attempts": 2,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Turn your CSV load into a file-source stream that writes counts to the console sink.",
+        "rubric": [
+          "readStream declares a schema, which the file source requires",
+          "writeStream uses an output mode valid for the aggregation",
+          "console output updates when a new file lands in the source directory"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "append mode rejected on an aggregation", "cause": "append needs a watermark before an aggregate output is final" }
+      ],
+      "resources": [
+        {
+          "url": "https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html",
+          "kind": "docs",
+          "title": "Structured Streaming Programming Guide",
+          "minutes": 60,
+          "cost": 0,
+          "verified": null,
+          "status": "unverified"
+        }
+      ],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_checkpointing",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Checkpointing and exactly-once restart",
+      "why": "A pricing job that double-counts ticks after a restart produces numbers nobody can trust.",
+      "status": "failed",
+      "estimate_min": 90,
+      "attempts": 1,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Kill your stream mid-batch, restart it, and show that no rows were duplicated.",
+        "rubric": [
+          "checkpointLocation is configured on the writer",
+          "the restart resumes from the committed offset rather than from the start",
+          "the output row count matches the single-run baseline"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "the stream will not restart after a code change", "cause": "the checkpoint holds a query plan and schema that no longer match" },
+        { "symptom": "rows reappear after a restart", "cause": "the sink is not idempotent, so at-least-once delivery shows up as duplicates" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "r_checkpoint_schema",
+      "type": "RECOVERY",
+      "title": "Recover an incompatible checkpoint",
+      "why": "Your restart failed on a checkpoint incompatibility, not on the streaming logic itself.",
+      "status": "ready",
+      "estimate_min": 40,
+      "diagnosis": "The stream refuses to restart after a code change because the checkpoint stores a query plan and state schema that no longer match the modified job.",
+      "remediation": [
+        "read the exception and identify whether offsets, state or schema is the incompatible part",
+        "run the modified query against a fresh checkpoint directory to confirm the new code is otherwise sound",
+        "choose deliberately between discarding accumulated state and reshaping the change to stay compatible"
+      ],
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Change your aggregation, trigger the restart failure on purpose, then restart cleanly and name what caused it.",
+        "rubric": [
+          "reproduces the incompatibility deliberately rather than stumbling into it",
+          "names offsets, state or schema as the specific incompatible part",
+          "restarts successfully and states what was given up to do so"
+        ]
+      },
+      "resources": [],
+      "provenance": { "run_id": "r_examiner_04", "confidence": 0.8 }
+    },
+    {
+      "id": "n_watermarking",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Event time and watermarks",
+      "why": "Quotes arrive out of order. Without a watermark the job holds state forever and eventually dies.",
+      "status": "ready",
+      "estimate_min": 75,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Add event-time windowing with a watermark, then feed a deliberately late record and show it dropped.",
+        "rubric": [
+          "withWatermark is applied to the event-time column before the aggregation",
+          "a record later than the threshold is absent from the output",
+          "the same record inside the threshold does appear in the output"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "state grows without bound", "cause": "the aggregation keys on a column that is not bounded by the watermark" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_pandas_udf",
+      "type": "UNIT",
+      "kind": "skill",
+      "title": "Vectorized pandas UDFs",
+      "why": "Black-Scholes row by row in a Python UDF is slow enough to stall the stream; vectorizing is what makes it viable.",
+      "status": "ready",
+      "estimate_min": 75,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Rewrite a scalar Python UDF as a pandas UDF and measure the speedup over 100k rows.",
+        "rubric": [
+          "the function is annotated with a pandas UDF type and a return type",
+          "it operates on a Series rather than one scalar per row",
+          "wall-clock timings for both versions are reported"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "pandas UDF is slower than the scalar version", "cause": "the batch size is tiny, so Arrow serialisation dominates" }
+      ],
+      "resources": [
+        {
+          "url": "https://spark.apache.org/docs/latest/api/python/user_guide/sql/arrow_pandas.html",
+          "kind": "docs",
+          "title": "Apache Arrow in PySpark",
+          "minutes": 35,
+          "cost": 0,
+          "verified": null,
+          "status": "unverified"
+        }
+      ],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_ingest",
+      "type": "UNIT",
+      "kind": "task",
+      "title": "Build the ingestion layer",
+      "why": "This is where the API half and the Spark half first have to survive each other.",
+      "status": "locked",
+      "estimate_min": 120,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Poll the chain on a schedule, land the raw responses, and expose them to Spark as a stream.",
+        "rubric": [
+          "raw responses are landed before any parsing, so a bad parse stays replayable",
+          "malformed payloads are routed aside rather than killing the job",
+          "the stream emits rows across at least two consecutive polls"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "the job dies on one bad payload", "cause": "parsing happens inline with ingestion, so there is nothing to replay" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_bs_udf",
+      "type": "UNIT",
+      "kind": "task",
+      "title": "Black-Scholes as a streaming UDF",
+      "why": "The moment the finance half and the Spark half become one program.",
+      "status": "locked",
+      "estimate_min": 90,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "build",
+        "prompt": "Apply your pricer to the streaming chain as a pandas UDF and emit a theoretical price per contract.",
+        "rubric": [
+          "the pricer runs vectorized over a Series rather than row by row",
+          "time to expiry is derived from the quote timestamp, not from wall-clock now()",
+          "output carries the theoretical price alongside the market mid"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "every contract prices as worthless near the close", "cause": "time to expiry computed in the wrong unit, so T collapses to zero" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_e2e",
+      "type": "UNIT",
+      "kind": "project",
+      "title": "End-to-end priced chain for one session",
+      "why": "The goal, stated as something you either produced or did not.",
+      "status": "locked",
+      "estimate_min": 180,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "artifact",
+        "prompt": "Run the whole pipeline for one market session and produce a table of market mid against your theoretical price.",
+        "rubric": [
+          "the pipeline runs unattended for a full session with no manual restart",
+          "the output table covers at least fifty contracts",
+          "a restart mid-session leaves no duplicate rows"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "gaps in the output around the open", "cause": "the poller starts before the chain is populated and never backfills" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    },
+    {
+      "id": "n_model_breaks",
+      "type": "UNIT",
+      "kind": "concept",
+      "title": "Where the model breaks",
+      "why": "A pipeline that prices contracts without telling you when to distrust it is worse than no pipeline.",
+      "status": "locked",
+      "estimate_min": 60,
+      "attempts": 0,
+      "exit_check": {
+        "evidence": "explain",
+        "prompt": "Pick the five contracts where your price diverged most from the market mid, and account for each divergence.",
+        "rubric": [
+          "names the volatility smile as a source of divergence away from the money",
+          "separates model error from data error such as a stale or very wide quote",
+          "states one condition under which the divergence would be arbitrage rather than model error"
+        ]
+      },
+      "known_pitfalls": [
+        { "symptom": "blames the data for every divergence", "cause": "a single flat volatility input guarantees a smile-shaped error pattern" }
+      ],
+      "resources": [],
+      "parent": null,
+      "provenance": { "run_id": "r_hand_00", "confidence": 1 }
+    }
+  ],
+  "edges": [
+    { "from": "n_options_basics", "to": "n_moneyness_payoff", "type": "requires", "strength": 0.9 },
+    { "from": "n_moneyness_payoff", "to": "n_bs_assumptions", "type": "requires", "strength": 0.9 },
+    { "from": "n_bs_assumptions", "to": "n_bs_formula", "type": "requires", "strength": 1 },
+    { "from": "n_bs_formula", "to": "n_greeks", "type": "requires", "strength": 1 },
+    { "from": "n_bs_formula", "to": "n_iv", "type": "requires", "strength": 1 },
+    { "from": "n_greeks", "to": "n_iv", "type": "requires", "strength": 1 },
+
+    { "from": "n_tradier_auth", "to": "n_option_chain", "type": "requires", "strength": 1 },
+    { "from": "n_options_basics", "to": "n_option_chain", "type": "requires", "strength": 0.7 },
+    { "from": "n_tradier_auth", "to": "n_rate_limits", "type": "requires", "strength": 0.8 },
+
+    { "from": "n_spark_df", "to": "n_structured_streaming", "type": "requires", "strength": 1 },
+    { "from": "n_structured_streaming", "to": "n_checkpointing", "type": "requires", "strength": 1 },
+    { "from": "n_structured_streaming", "to": "n_watermarking", "type": "requires", "strength": 0.9 },
+    { "from": "n_spark_df", "to": "n_pandas_udf", "type": "requires", "strength": 0.9 },
+
+    { "from": "n_option_chain", "to": "n_ingest", "type": "requires", "strength": 1 },
+    { "from": "n_rate_limits", "to": "n_ingest", "type": "requires", "strength": 0.8 },
+    { "from": "n_structured_streaming", "to": "n_ingest", "type": "requires", "strength": 1 },
+
+    { "from": "n_bs_formula", "to": "n_bs_udf", "type": "requires", "strength": 1 },
+    { "from": "n_pandas_udf", "to": "n_bs_udf", "type": "requires", "strength": 1 },
+
+    { "from": "n_ingest", "to": "n_e2e", "type": "requires", "strength": 1 },
+    { "from": "n_bs_udf", "to": "n_e2e", "type": "requires", "strength": 1 },
+    { "from": "n_checkpointing", "to": "n_e2e", "type": "requires", "strength": 0.9 },
+
+    { "from": "n_e2e", "to": "n_model_breaks", "type": "requires", "strength": 1 },
+    { "from": "n_iv", "to": "n_model_breaks", "type": "requires", "strength": 0.8 },
+
+    { "from": "n_options_basics", "to": "n_tradier_auth", "type": "then", "strength": 0.5 },
+    { "from": "n_watermarking", "to": "n_pandas_udf", "type": "then", "strength": 0.4 },
+
+    { "from": "n_checkpointing", "to": "r_checkpoint_schema", "type": "on_fail", "strength": 1 }
+  ],
+  "events": [
+    { "at": "2026-08-16T09:02:00Z", "type": "opened", "node": "n_options_basics" },
+    { "at": "2026-08-16T09:48:00Z", "type": "passed", "node": "n_options_basics", "minutes": 46, "modality": "text" },
+    { "at": "2026-08-16T10:05:00Z", "type": "opened", "node": "n_moneyness_payoff" },
+    { "at": "2026-08-16T10:44:00Z", "type": "passed", "node": "n_moneyness_payoff", "minutes": 39, "modality": "text" },
+    { "at": "2026-08-16T11:10:00Z", "type": "opened", "node": "n_tradier_auth" },
+    { "at": "2026-08-16T11:41:00Z", "type": "passed", "node": "n_tradier_auth", "minutes": 31, "modality": "docs" },
+    { "at": "2026-08-17T19:30:00Z", "type": "opened", "node": "n_spark_df" },
+    { "at": "2026-08-17T21:02:00Z", "type": "passed", "node": "n_spark_df", "minutes": 92, "modality": "video" },
+    { "at": "2026-08-18T20:00:00Z", "type": "opened", "node": "n_structured_streaming" },
+    { "at": "2026-08-18T21:20:00Z", "type": "attempted", "node": "n_structured_streaming", "minutes": 80 },
+    { "at": "2026-08-18T21:55:00Z", "type": "passed", "node": "n_structured_streaming", "minutes": 35, "modality": "docs" },
+    { "at": "2026-08-19T20:15:00Z", "type": "opened", "node": "n_checkpointing" },
+    { "at": "2026-08-19T21:40:00Z", "type": "failed", "node": "n_checkpointing", "minutes": 85, "detail": "restart raised an incompatibility after the aggregation was changed" },
+    { "at": "2026-08-19T21:44:00Z", "type": "node_inserted", "node": "r_checkpoint_schema", "detail": "recovery materialized from the failure on n_checkpointing" },
+    { "at": "2026-08-20T09:15:00Z", "type": "opened", "node": "n_option_chain" }
+  ],
+  "mutations": [
+    {
+      "at": "2026-08-19T21:44:00Z",
+      "run_id": "r_examiner_04",
+      "op": "insert_recovery",
+      "target": "n_checkpointing",
+      "reason": "Diagnostic answers located the failure in checkpoint compatibility rather than in the streaming logic, so the gap is local to this unit and does not need a new prerequisite.",
+      "payload": { "node": "r_checkpoint_schema", "edge": { "from": "n_checkpointing", "to": "r_checkpoint_schema", "type": "on_fail" } },
+      "inverse": { "remove_node": "r_checkpoint_schema", "remove_edges": [{ "from": "n_checkpointing", "to": "r_checkpoint_schema", "type": "on_fail" }] }
+    }
+  ]
+}
