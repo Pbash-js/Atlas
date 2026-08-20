@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ArchitectInput } from "../llm/architect";
-import { hasKey, storeKey } from "../llm/model";
+import { hasKey, storeKey, testConnection } from "../llm/model";
 
 const BUDGETS = ["3 hrs", "6 hrs", "10 hrs", "15+ hrs"];
 
@@ -15,8 +15,33 @@ export function Intake({ initial, onDraw }: Props) {
   const [budget, setBudget] = useState(initial?.weeklyHours ?? "6 hrs");
   const [keyed, setKeyed] = useState(hasKey());
   const [keyDraft, setKeyDraft] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [keyNote, setKeyNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const ready = goal.trim().length >= 8 && keyed;
+
+  /**
+   * Prove the key against the real endpoint before storing it. Saving an unchecked key just
+   * defers the failure to the middle of a forty-second plan draw, where it is far more annoying
+   * and much harder to attribute.
+   */
+  async function checkAndKeep() {
+    setChecking(true);
+    setKeyNote(null);
+    try {
+      const result = await testConnection(keyDraft);
+      if (!result.ok) {
+        setKeyNote({ ok: false, text: result.reason });
+        return;
+      }
+      storeKey(keyDraft);
+      setKeyDraft("");
+      setKeyed(hasKey());
+      setKeyNote({ ok: true, text: result.note ?? "Key checked against Google. Ready." });
+    } finally {
+      setChecking(false);
+    }
+  }
 
   return (
     <div className="scroll">
@@ -42,18 +67,21 @@ export function Intake({ initial, onDraw }: Props) {
               />
               <button
                 className="btn"
-                disabled={keyDraft.trim().length < 20}
-                onClick={() => {
-                  storeKey(keyDraft);
-                  setKeyDraft("");
-                  setKeyed(hasKey());
-                }}
+                disabled={keyDraft.trim().length < 20 || checking}
+                onClick={() => void checkAndKeep()}
               >
-                Keep it
+                {checking ? "Checking…" : "Test and keep"}
               </button>
             </div>
+            {keyNote && (
+              <p className={keyNote.ok ? "keynote keynote--ok" : "keynote keynote--bad"}>
+                {keyNote.text}
+              </p>
+            )}
           </div>
         )}
+
+        {keyed && keyNote?.ok && <p className="keynote keynote--ok">{keyNote.text}</p>}
 
         <div className="intake__field">
           <label className="intake__label" htmlFor="goal">

@@ -21,9 +21,23 @@ interface Props {
   node: AtlasNode | null;
   onSelect: (id: string) => void;
   arabic?: boolean;
+  /** Runs the Librarian for this node; resolves once the found resources are saved. */
+  onFindResources?: (nodeId: string) => Promise<void>;
+  /** Node id currently being searched, so the button can show progress. */
+  findingId?: string | null;
+  findError?: string | null;
 }
 
-export function NodeDetail({ graph, model, node, onSelect, arabic = false }: Props) {
+export function NodeDetail({
+  graph,
+  model,
+  node,
+  onSelect,
+  arabic = false,
+  onFindResources,
+  findingId = null,
+  findError = null,
+}: Props) {
   const [attempts, setAttempts] = useState<Record<string, Attempt>>({});
 
   if (!node) {
@@ -82,6 +96,7 @@ export function NodeDetail({ graph, model, node, onSelect, arabic = false }: Pro
 
   const rubric = check?.rubric ?? [];
   const ticked = rubric.filter((_, i) => attempt.ticks[i]).length;
+  const searching = findingId === node.id;
 
   const hint = attempt.open
     ? `${ticked} of ${rubric.length} marked`
@@ -267,7 +282,8 @@ export function NodeDetail({ graph, model, node, onSelect, arabic = false }: Pro
         <h3 className="sect__h">Resources</h3>
         {resources.length === 0 ? (
           <p className="none">
-            No verified resource yet. Nothing is shelved here until it has been fetched and checked.
+            Nothing shelved here yet. Atlas can search the web for what practitioners currently
+            recommend for this step.
           </p>
         ) : (
           <ul className="ulist">
@@ -284,6 +300,27 @@ export function NodeDetail({ graph, model, node, onSelect, arabic = false }: Pro
             ))}
           </ul>
         )}
+
+        {onFindResources && node.type !== "DECISION" && (
+          <div className="res__find">
+            <button
+              className="btn btn--quiet"
+              disabled={searching}
+              onClick={() => void onFindResources(node.id)}
+            >
+              {searching
+                ? "Searching the web…"
+                : resources.length
+                  ? "Search again"
+                  : "Find resources"}
+            </button>
+            {searching && (
+              <span className="check__hint">Reading forums and reviews · up to a minute</span>
+            )}
+          </div>
+        )}
+
+        {findError && !searching && <p className="res__error">{findError}</p>}
       </section>
 
       {pitfalls.length > 0 && (

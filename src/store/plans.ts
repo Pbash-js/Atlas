@@ -1,4 +1,4 @@
-import type { AtlasGraph } from "../schema/atlas";
+import type { AtlasGraph, Resource } from "../schema/atlas";
 import { validateGraph } from "../schema/validate";
 import golden from "../../fixtures/golden-bs-streaming.json";
 
@@ -66,6 +66,38 @@ export function savePlan(graph: AtlasGraph): StoredPlan {
 
   write([record, ...existing.filter((p) => p.id !== graph.id)]);
   return { ...record, graph };
+}
+
+/**
+ * Attach freshly-found resources to one node and persist the plan.
+ *
+ * Returns a new graph rather than mutating in place, so React sees a changed reference and the
+ * panel re-renders. Resources are replaced wholesale, not merged: a second search is the user
+ * asking for a better answer than the one already there.
+ */
+export function setNodeResources(
+  graph: AtlasGraph,
+  nodeId: string,
+  resources: Resource[],
+): AtlasGraph {
+  const next: AtlasGraph = {
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n.id === nodeId && n.type !== "DECISION" ? { ...n, resources } : n,
+    ),
+    events: [
+      ...graph.events,
+      {
+        at: new Date().toISOString(),
+        type: "resource_swapped" as const,
+        node: nodeId,
+        detail: `${resources.length} resource${resources.length === 1 ? "" : "s"} found by web search`,
+      },
+    ],
+  };
+
+  savePlan(next);
+  return next;
 }
 
 export function touchPlan(id: string) {

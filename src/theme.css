@@ -1553,3 +1553,42 @@ button {
 @media (max-width: 1000px) {
   .record { display: none; }
 }
+
+/* ── key check + librarian ─────────────────────────────────────────────── */
+
+.keynote {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 9px 12px;
+  border-left: 2px solid var(--at-rule);
+  background: var(--at-raised);
+}
+
+.keynote--ok {
+  border-left-color: var(--at-passed);
+  color: var(--at-dim);
+}
+
+.keynote--bad {
+  border-left-color: var(--at-failed);
+  color: var(--at-failed);
+}
+
+.res__find {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.res__error {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  border-left: 2px solid var(--at-failed);
+  background: var(--at-raised);
+  color: var(--at-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}

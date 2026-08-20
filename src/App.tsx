@@ -8,8 +8,16 @@ import { Home } from "./screens/Home";
 import { Chronicle } from "./screens/Chronicle";
 import { Intake } from "./screens/Intake";
 import { Generating } from "./screens/Generating";
-import { listPlans, savePlan, seedOnce, touchPlan, type StoredPlan } from "./store/plans";
+import {
+  listPlans,
+  savePlan,
+  seedOnce,
+  setNodeResources,
+  touchPlan,
+  type StoredPlan,
+} from "./store/plans";
 import { architect, type ArchitectInput, type Phase } from "./llm/architect";
+import { findResources } from "./llm/librarian";
 import { GeminiModel } from "./llm/model";
 import { fmt } from "./lib/format";
 
@@ -47,6 +55,9 @@ export default function App() {
   const [planId, setPlanId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ground, setGround] = useState<Ground>("dark");
+
+  const [findingId, setFindingId] = useState<string | null>(null);
+  const [findError, setFindError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
@@ -101,6 +112,39 @@ export default function App() {
       abortRef.current = null;
     }
   }, []);
+
+  /**
+   * Run the Librarian for one node and persist what it finds. Failures are reported in place
+   * rather than thrown away — the commonest one (no grounded-search quota on the key) is
+   * something the user can act on, so it must reach them intact.
+   */
+  const handleFindResources = useCallback(
+    async (nodeId: string) => {
+      const plan = current;
+      const target = plan?.graph.nodes.find((n) => n.id === nodeId);
+      if (!plan || !target || target.type === "DECISION") return;
+
+      setFindError(null);
+      setFindingId(nodeId);
+      try {
+        const found = await findResources(model, {
+          node: target,
+          goalStatement: plan.graph.goal.statement,
+        });
+        if (found.length === 0) {
+          setFindError("The search came back with nothing usable. Try again in a moment.");
+          return;
+        }
+        setNodeResources(plan.graph, nodeId, found);
+        setPlans(listPlans());
+      } catch (err) {
+        setFindError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setFindingId(null);
+      }
+    },
+    [current],
+  );
 
   const cancelDraw = useCallback(() => {
     abortRef.current?.abort();
@@ -222,6 +266,9 @@ export default function App() {
                 node={selected}
                 onSelect={setSelectedId}
                 arabic={ARABIC}
+                onFindResources={handleFindResources}
+                findingId={findingId}
+                findError={findError}
               />
             </>
           ) : (
