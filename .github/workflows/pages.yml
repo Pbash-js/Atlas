@@ -1,0 +1,64 @@
+name: Deploy to GitHub Pages
+
+# Atlas is a client-only Vite build with no backend, so "publish" is just
+# "build the static bundle and hand it to Pages". Tests gate the build —
+# a failing suite should never reach a public URL.
+#
+# No API key is baked in here on purpose: this workflow never sets
+# VITE_GEMINI_API_KEY. Doing so would ship the real key in the public JS
+# bundle for anyone to read. The deployed site works BYOK — a visitor
+# pastes their own Gemini key on the "New" screen (Intake.tsx), stored
+# only in their browser's localStorage. That's the intended design, not
+# a gap: see AI integration notes in src/llm/model.ts.
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment in flight; let a running one finish rather than
+# racing two Pages publishes against each other.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npm run build
+        env:
+          # /Atlas/ — this is a project page (pbash-js.github.io/Atlas/), not a user/org root
+          # page, so every asset path needs the repo name prefixed. See vite.config.ts.
+          VITE_BASE: /Atlas/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
