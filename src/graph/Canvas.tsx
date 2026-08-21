@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AtlasGraph, Edge } from "../schema/atlas";
 import { FINISH_ID, START_ID, NODE_H, NODE_W, TERM_H, TERM_W } from "./layout";
+import type { MutationIntent } from "../llm/mutator";
+import type { Notice } from "../lib/notice";
 import type { PlanModel } from "./model";
 import { edgeStyle, pathH, pathV } from "./edges";
 import { ST } from "./status";
@@ -25,20 +27,30 @@ interface Menu {
   nodeId: string | null;
 }
 
-const NODE_MENU = [
-  { label: "Edit this node", hint: "title, why, estimate" },
-  { label: "Rewrite the exit check", hint: "rubric" },
-  { label: "Add a prerequisite concept", hint: "insert above" },
-  { label: "Insert a recovery here", hint: "on failure" },
-  { label: "Explain it more simply", hint: "ask atlas" },
-  { label: "Prune from the plan", hint: "with reason" },
+type MenuKind = MutationIntent["kind"] | "reshape" | "fit";
+
+interface MenuEntry {
+  label: string;
+  hint: string;
+  kind: MenuKind;
+}
+
+const NODE_MENU: MenuEntry[] = [
+  { label: "Edit this node", hint: "title, why, estimate", kind: "edit_node" },
+  { label: "Rewrite the exit check", hint: "rubric", kind: "rewrite_check" },
+  { label: "Add a prerequisite concept", hint: "insert above", kind: "insert_prereq" },
+  { label: "Insert a recovery here", hint: "on failure", kind: "insert_recovery" },
+  { label: "Explain it more simply", hint: "ask atlas", kind: "explain" },
+  { label: "Prune from the plan", hint: "with reason", kind: "prune_node" },
 ];
 
-const PLAN_MENU = [
-  { label: "Reshape the whole plan", hint: "re-derive" },
-  { label: "Add a unit", hint: "new card" },
-  { label: "Open a new chapter", hint: "gate" },
-  { label: "Fit the plan", hint: "view" },
+const PLAN_MENU: MenuEntry[] = [
+  { label: "Reshape the whole plan", hint: "re-derive", kind: "reshape" },
+  { label: "Add a unit", hint: "new card", kind: "insert_unit" },
+  // The design's "Open a new chapter" had nothing to act on: chapters are derived from ranks, so
+  // there is no chapter to open, only names to set. Retitling is the operation that exists.
+  { label: "Retitle the chapters", hint: "rename", kind: "retitle_chapters" },
+  { label: "Fit the plan", hint: "view", kind: "fit" },
 ];
 
 const LEGEND = [
@@ -65,6 +77,12 @@ export interface CanvasProps {
   onSelect: (id: string) => void;
   arabic?: boolean;
   showLegend?: boolean;
+  /** Runs a menu action or a free-text ask. Reshape is handled by the host, not the Mutator. */
+  onAction?: (intent: MutationIntent | { kind: "reshape" }) => void;
+  notices?: Notice[];
+  onDismissNotice?: (id: string) => void;
+  /** True while any action is in flight, so the menu can refuse to queue a second one. */
+  busy?: boolean;
 }
 
 export function Canvas({
@@ -74,13 +92,16 @@ export function Canvas({
   onSelect,
   arabic = false,
   showLegend = true,
+  onAction,
+  notices = [],
+  onDismissNotice,
+  busy = false,
 }: CanvasProps) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = useState<Hover | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [chatText, setChatText] = useState("");
-  const [chatLog, setChatLog] = useState<string[]>([]);
 
   const { layout, chapters, nums, bounds, byId, units } = model;
 
@@ -160,9 +181,20 @@ export function Canvas({
     });
   };
 
-  const say = (line: string) => {
-    setChatLog((log) => [...log, line].slice(-2));
+  /** Menu entries either move the viewport locally or hand a real intent to the host. */
+  const runMenuEntry = (entry: MenuEntry, targetId: string | null) => {
     setMenu(null);
+    if (entry.kind === "fit") {
+      fit();
+      return;
+    }
+    if (!onAction) return;
+    if (entry.kind === "reshape" || entry.kind === "insert_unit" || entry.kind === "retitle_chapters") {
+      onAction({ kind: entry.kind } as MutationIntent | { kind: "reshape" });
+      return;
+    }
+    if (!targetId) return;
+    onAction({ kind: entry.kind, nodeId: targetId } as MutationIntent);
   };
 
   // ── edges, including the synthetic Start / Finis spurs ──────────────────
@@ -510,9 +542,19 @@ export function Canvas({
 
       <div className="chat">
         <div className="chat__inner" onMouseDown={(ev) => ev.stopPropagation()}>
-          {chatLog.map((line, i) => (
-            <div key={i} className="chat__line">
-              {line}
+          {notices.map((n) => (
+            <div key={n.id} className={`chat__line is-${n.status}`}>
+              <span className="chat__line-text">{n.text}</span>
+              {onDismissNotice && (
+                <button
+                  className="chat__line-x"
+                  title="dismiss"
+                  aria-label="Dismiss"
+                  onClick={() => onDismissNotice(n.id)}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
           <form
@@ -520,13 +562,9 @@ export function Canvas({
             onSubmit={(ev) => {
               ev.preventDefault();
               const q = chatText.trim();
-              if (!q) return;
-              const sel = selectedId ? byId.get(selectedId) : null;
-              const where = sel ? `“${sel.title}”` : "the plan";
+              if (!q || busy || !onAction) return;
               setChatText("");
-              say(
-                `Atlas, on ${where}: “${q}” — it would propose the change as a mutation, show you the diff against the graph, and record the reason in the chronicle before anything moves.`,
-              );
+              onAction({ kind: "ask", text: q, nodeId: selectedId });
             }}
           >
             <span className="chat__mark">❦</span>
@@ -535,10 +573,11 @@ export function Canvas({
               type="text"
               placeholder="Ask Atlas — reshape the plan, add a concept, explain a node"
               value={chatText}
+              disabled={busy}
               onChange={(e) => setChatText(e.target.value)}
             />
-            <button className="chat__send" type="submit">
-              Ask
+            <button className="chat__send" type="submit" disabled={busy || !chatText.trim()}>
+              {busy ? "…" : "Ask"}
             </button>
           </form>
           <div className="chat__hint">
@@ -563,16 +602,8 @@ export function Canvas({
             <button
               key={it.label}
               className="menu__item"
-              onClick={() => {
-                if (it.label === "Fit the plan") {
-                  fit();
-                  setMenu(null);
-                  return;
-                }
-                say(
-                  `Atlas — “${it.label}” on ${menuTarget ? `“${menuTarget.title}”` : "the plan"}: it drafts the mutation, shows the diff, and waits for your assent.`,
-                );
-              }}
+              disabled={busy && it.kind !== "fit"}
+              onClick={() => runMenuEntry(it, menu.nodeId)}
             >
               <span>{it.label}</span>
               <span className="menu__hint">{it.hint}</span>

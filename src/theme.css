@@ -745,6 +745,9 @@ button {
 }
 
 .chat__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   border: 1px solid var(--at-rule);
   border-left: 2px solid var(--at-gold);
   background: var(--at-panel);
@@ -753,6 +756,50 @@ button {
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--at-dim);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.chat__line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat__line-x {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  margin: -2px 0 0;
+  color: var(--at-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat__line-x:hover {
+  color: var(--at-ink);
+}
+
+.chat__line.is-pending {
+  border-left-color: var(--at-progress);
+  animation: notice-pulse 1.5s ease-in-out infinite;
+}
+
+.chat__line.is-ok {
+  border-left-color: var(--at-passed);
+}
+
+.chat__line.is-error {
+  border-left-color: var(--at-failed);
+  color: var(--at-ink);
+}
+
+@keyframes notice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat__line.is-pending { animation: none; }
 }
 
 .chat__form {

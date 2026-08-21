@@ -19,9 +19,13 @@ import {
 } from "./store/plans";
 import { architect, type ArchitectInput, type Phase } from "./llm/architect";
 import { findResources } from "./llm/librarian";
+import { mutate, type MutationIntent } from "./llm/mutator";
+import { applyPatch } from "./graph/mutate";
+import { validateGraph } from "./schema/validate";
 import { GeminiModel } from "./llm/model";
 import { isHttpUrl, isReachable, titleFromUrl } from "./resources/verify";
 import { fmt } from "./lib/format";
+import { noticeId, NOTICE_TTL_MS, type Notice } from "./lib/notice";
 
 type Screen = "home" | "plan" | "chronicle" | "intake" | "generating";
 type Ground = "dark" | "soft";
@@ -63,6 +67,9 @@ export default function App() {
 
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
+
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [acting, setActing] = useState(false);
 
   const [phase, setPhase] = useState<Phase | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
@@ -216,6 +223,115 @@ export default function App() {
     [current],
   );
 
+  const dismissNotice = useCallback((id: string) => {
+    setNotices((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  /** Settle a pending notice in place, and let successes retire themselves. */
+  const settleNotice = useCallback((id: string, status: "ok" | "error", text: string) => {
+    setNotices((prev) => prev.map((n) => (n.id === id ? { ...n, status, text } : n)));
+    if (status === "ok") {
+      setTimeout(() => {
+        setNotices((prev) => prev.filter((n) => n.id !== id));
+      }, NOTICE_TTL_MS);
+    }
+  }, []);
+
+  const LABELS: Record<string, string> = {
+    edit_node: "Revising the card",
+    rewrite_check: "Rewriting the exit check",
+    insert_prereq: "Looking for the missing prerequisite",
+    insert_recovery: "Drafting a recovery",
+    prune_node: "Weighing whether it earns its place",
+    explain: "Putting it more simply",
+    insert_unit: "Drafting a new card",
+    retitle_chapters: "Naming the chapters",
+    ask: "Reading the plan",
+    reshape: "Redrawing the plan",
+  };
+
+  /**
+   * Every context-menu action and every chat ask lands here.
+   *
+   * A patch is applied to a copy, validated, and only then persisted — so a model that returns
+   * something structurally legal but graph-breaking (a cycle, say) is refused rather than saved.
+   */
+  const handleAction = useCallback(
+    async (intent: MutationIntent | { kind: "reshape" }) => {
+      const plan = current;
+      if (!plan || acting) return;
+
+      const id = noticeId();
+      setNotices((prev) => [
+        ...prev.filter((n) => n.status !== "pending"),
+        { id, status: "pending", text: `${LABELS[intent.kind] ?? "Working"}…` },
+      ]);
+      setActing(true);
+
+      try {
+        if (intent.kind === "reshape") {
+          // Reshape is a re-derivation, not a patch — and it is deliberately NON-DESTRUCTIVE.
+          // The redrawn plan is saved as a separate record, so a structure you liked better is
+          // still sitting in the reading room afterwards.
+          const passed = plan.graph.nodes
+            .filter((n) => n.status === "passed")
+            .map((n) => n.title);
+          const result = await architect(
+            model,
+            {
+              goal: plan.graph.goal.statement,
+              weeklyHours: lastInput?.weeklyHours ?? "6 hrs",
+              known: passed.join("\n"),
+            },
+            // Reshape reports through its notice rather than the generation screen, so the
+            // per-phase callback has nothing to drive here.
+            () => {},
+          );
+          const saved = savePlan(result.graph);
+          setPlans(listPlans());
+          setPlanId(saved.id);
+          setSelectedId(openingNode(saved));
+          settleNotice(
+            id,
+            "ok",
+            `Redrawn as a new plan — ${result.graph.nodes.length} cards. The original is still in the reading room.`,
+          );
+          return;
+        }
+
+        const outcome = await mutate(model, plan.graph, intent);
+
+        if (outcome.type === "answer") {
+          settleNotice(id, "ok", outcome.text);
+          return;
+        }
+
+        const next = applyPatch(plan.graph, outcome.patch, `r_mutate_${Date.now().toString(36)}`);
+        const check = validateGraph(next);
+        if (!check.ok || !check.graph) {
+          settleNotice(
+            id,
+            "error",
+            `That change would have broken the plan, so nothing moved. ${check.errors[0]?.message ?? ""}`,
+          );
+          return;
+        }
+
+        savePlan(check.graph);
+        setPlans(listPlans());
+        if (outcome.patch.op === "prune_node" && selectedId === outcome.patch.target) {
+          setSelectedId(null);
+        }
+        settleNotice(id, "ok", outcome.patch.reason);
+      } catch (err) {
+        settleNotice(id, "error", err instanceof Error ? err.message : String(err));
+      } finally {
+        setActing(false);
+      }
+    },
+    [current, acting, lastInput, selectedId, settleNotice],
+  );
+
   const cancelDraw = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -329,6 +445,10 @@ export default function App() {
                 onSelect={setSelectedId}
                 arabic={ARABIC}
                 showLegend={SHOW_LEGEND}
+                onAction={handleAction}
+                notices={notices}
+                onDismissNotice={dismissNotice}
+                busy={acting}
               />
               <NodeDetail
                 graph={current.graph}

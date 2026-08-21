@@ -170,6 +170,10 @@ export const PatchOp = z.enum([
   "weaken_edge",
   "prune_unit",
   "expand_unit",
+  // Revisions to an existing card rather than to the shape of the graph.
+  "edit_node",
+  "rewrite_check",
+  "retitle_chapters",
 ]);
 
 /**
