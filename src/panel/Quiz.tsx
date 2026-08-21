@@ -7,14 +7,35 @@ interface Props {
   questions: Question[];
   results: Result[] | null;
   marking: boolean;
+  /** Answers restored from the cache, so a set-aside quiz resumes where it was left. */
+  initialAnswers?: Record<string, string>;
+  onAnswersChange?: (answers: Record<string, string>) => void;
   onSubmit: (answers: Record<string, string>) => void;
   onClose: () => void;
   onRetake: () => void;
 }
 
-export function Quiz({ questions, results, marking, onSubmit, onClose, onRetake }: Props) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+export function Quiz({
+  questions,
+  results,
+  marking,
+  initialAnswers,
+  onAnswersChange,
+  onSubmit,
+  onClose,
+  onRetake,
+}: Props) {
+  const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers ?? {});
   const answered = questions.filter((q) => (answers[q.id] ?? "").trim() !== "").length;
+
+  /** Update locally and tell the host, so the cache keeps pace with what has been typed. */
+  const record = (id: string, value: string) => {
+    setAnswers((prev) => {
+      const next = { ...prev, [id]: value };
+      onAnswersChange?.(next);
+      return next;
+    });
+  };
 
   if (results) {
     const score = results.filter((r) => r.correct).length;
@@ -87,7 +108,7 @@ export function Quiz({ questions, results, marking, onSubmit, onClose, onRetake 
                       type="radio"
                       name={q.id}
                       checked={answers[q.id] === String(oi)}
-                      onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: String(oi) }))}
+                      onChange={() => record(q.id, String(oi))}
                     />
                     <span>{opt}</span>
                   </label>
@@ -99,7 +120,7 @@ export function Quiz({ questions, results, marking, onSubmit, onClose, onRetake 
                 rows={3}
                 placeholder="A sentence or two."
                 value={answers[q.id] ?? ""}
-                onChange={(e) => setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                onChange={(e) => record(q.id, e.target.value)}
               />
             )}
           </li>

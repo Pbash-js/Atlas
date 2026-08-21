@@ -37,6 +37,7 @@ import {
   getMasteryStore,
   type NodeMastery,
 } from "./quiz/mastery";
+import { fingerprintOf, getQuizCache, isUsable, newEntry } from "./quiz/cache";
 
 type Screen = "home" | "plan" | "chronicle" | "intake" | "generating";
 type Ground = "dark" | "soft";
@@ -86,6 +87,7 @@ export default function App() {
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [mastery, setMastery] = useState<NodeMastery | null>(null);
+  const [quizResumable, setQuizResumable] = useState(false);
 
   /** How many questions a quiz asks. Short enough to actually finish in one sitting. */
   const QUIZ_LENGTH = 5;
@@ -369,16 +371,56 @@ export default function App() {
     };
   }, [selectedId, quiz]);
 
+  // Does an un-submitted quiz still match this card? Drives the "Resume quiz" affordance, so the
+  // cache is visible rather than a silent surprise.
+  useEffect(() => {
+    let live = true;
+    const target = current?.graph.nodes.find((n) => n.id === selectedId);
+    if (!selectedId || !target || target.type === "DECISION" || !mastery) {
+      setQuizResumable(false);
+      return;
+    }
+    void getQuizCache()
+      .load(selectedId)
+      .then((cached) => {
+        if (live) setQuizResumable(isUsable(cached, fingerprintOf(target, mastery)));
+      });
+    return () => {
+      live = false;
+    };
+  }, [selectedId, mastery, current, quiz]);
+
   const handleTakeQuiz = useCallback(
-    async (nodeId: string) => {
+    async (nodeId: string, opts?: { fresh?: boolean }) => {
       const plan = current;
       const target = plan?.graph.nodes.find((n) => n.id === nodeId);
       if (!plan || !target || target.type === "DECISION") return;
 
       setQuizError(null);
+      const existing = (await getMasteryStore().load(nodeId)) ?? emptyMastery(nodeId);
+      const fingerprint = fingerprintOf(target, existing);
+      const cache = getQuizCache();
+
+      // A cached quiz is only served when nothing that shapes the questions has moved since it
+      // was written — see fingerprintOf. Submitting one advances mastery, so the next request
+      // misses on purpose and is generated fresh against what was just got wrong.
+      if (!opts?.fresh) {
+        const cached = await cache.load(nodeId);
+        if (isUsable(cached, fingerprint)) {
+          setQuiz({
+            nodeId,
+            questions: cached.questions,
+            answers: cached.answers,
+            results: null,
+            marking: false,
+            fromCache: true,
+          });
+          return;
+        }
+      }
+
       setQuizLoading(true);
       try {
-        const existing = (await getMasteryStore().load(nodeId)) ?? emptyMastery(nodeId);
         const focus = chooseFocus(existing, QUIZ_LENGTH);
         const questions = await generateQuiz(model, {
           node: target,
@@ -387,7 +429,8 @@ export default function App() {
           focus,
           count: QUIZ_LENGTH,
         });
-        setQuiz({ nodeId, questions, results: null, marking: false });
+        await cache.save(newEntry(nodeId, fingerprint, questions));
+        setQuiz({ nodeId, questions, answers: {}, results: null, marking: false });
       } catch (err) {
         setQuizError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -395,6 +438,17 @@ export default function App() {
       }
     },
     [current],
+  );
+
+  /** Persist answers as they are typed, so setting a quiz aside loses nothing. */
+  const handleQuizAnswersChange = useCallback(
+    async (nodeId: string, answers: Record<string, string>) => {
+      const cache = getQuizCache();
+      const cached = await cache.load(nodeId);
+      if (!cached) return;
+      await cache.save({ ...cached, answers });
+    },
+    [],
   );
 
   const handleSubmitQuiz = useCallback(
@@ -416,6 +470,10 @@ export default function App() {
         );
         await store.save(updated);
         setMastery(updated);
+
+        // A marked quiz is spent. Clearing it here is belt-and-braces — the mastery update alone
+        // already moves the fingerprint — but it means a stale entry never lingers in storage.
+        await getQuizCache().clear(nodeId);
         setQuiz({ nodeId, questions: quiz.questions, results, marking: false });
 
         const ratio = results.filter((r) => r.correct).length / (results.length || 1);
@@ -567,7 +625,9 @@ export default function App() {
                 onTakeQuiz={handleTakeQuiz}
                 onSubmitQuiz={handleSubmitQuiz}
                 onCloseQuiz={() => setQuiz(null)}
+                onQuizAnswersChange={handleQuizAnswersChange}
                 quiz={quiz}
+                quizResumable={quizResumable}
                 quizLoading={quizLoading}
                 quizError={quizError}
                 mastery={mastery}

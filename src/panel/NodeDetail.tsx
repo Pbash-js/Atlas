@@ -20,6 +20,10 @@ export interface QuizState {
   questions: Question[];
   results: Result[] | null;
   marking: boolean;
+  /** Answers restored from the cache when a set-aside quiz is reopened. */
+  answers?: Record<string, string>;
+  /** True when these questions came from the cache rather than a fresh generation. */
+  fromCache?: boolean;
 }
 
 function MasterySummary({ mastery }: { mastery: NodeMastery }) {
@@ -90,10 +94,13 @@ interface Props {
   addingId?: string | null;
   addError?: string | null;
   /** Quiz wiring. The panel renders; the host owns generation, marking and persistence. */
-  onTakeQuiz?: (nodeId: string) => void;
+  onTakeQuiz?: (nodeId: string, opts?: { fresh?: boolean }) => void;
   onSubmitQuiz?: (nodeId: string, answers: Record<string, string>) => void;
   onCloseQuiz?: () => void;
+  onQuizAnswersChange?: (nodeId: string, answers: Record<string, string>) => void;
   quiz?: QuizState | null;
+  /** A cached, un-submitted quiz is waiting for this card. */
+  quizResumable?: boolean;
   quizLoading?: boolean;
   quizError?: string | null;
   mastery?: NodeMastery | null;
@@ -115,7 +122,9 @@ export function NodeDetail({
   onTakeQuiz,
   onSubmitQuiz,
   onCloseQuiz,
+  onQuizAnswersChange,
   quiz: quizState = null,
+  quizResumable = false,
   quizLoading = false,
   quizError = null,
   mastery = null,
@@ -173,6 +182,7 @@ export function NodeDetail({
   // "add anyway" only makes sense once there is a real failed attempt to override, and only for
   // the same URL still sitting in the box — editing it should clear the offer, not carry it over.
   const canForceAdd = Boolean(addError) && !adding && draftLooksLikeAUrl && node.type !== "DECISION";
+  const resumable = quizResumable && !quiz;
 
   const hint = gated
     ? `shut · chapter ${numeral(chapterIndex, arabic)} is not yet open`
@@ -264,9 +274,12 @@ export function NodeDetail({
 
           {quiz ? (
             <Quiz
+              key={`${node.id}:${quiz.questions.map((q) => q.id).join(",")}`}
               questions={quiz.questions}
               results={quiz.results}
               marking={quiz.marking}
+              initialAnswers={quiz.answers}
+              onAnswersChange={(answers) => onQuizAnswersChange?.(node.id, answers)}
               onSubmit={(answers) => onSubmitQuiz?.(node.id, answers)}
               onClose={() => onCloseQuiz?.()}
               onRetake={() => onTakeQuiz?.(node.id)}
@@ -285,9 +298,18 @@ export function NodeDetail({
 
               <div className="check__actions">
                 <button className="btn" disabled={barred || quizLoading} onClick={() => onTakeQuiz?.(node.id)}>
-                  {quizLoading ? "Writing the quiz…" : mastery && mastery.quizzes > 0 ? "Take another quiz" : "Take a quiz"}
+                  {quizLoading ? "Writing the quiz…" : resumable ? "Resume quiz" : mastery && mastery.quizzes > 0 ? "Take another quiz" : "Take a quiz"}
                 </button>
-                <span className="check__hint tnum">{hint}</span>
+                {resumable && (
+                  <button
+                    className="btn btn--quiet"
+                    disabled={barred || quizLoading}
+                    onClick={() => onTakeQuiz?.(node.id, { fresh: true })}
+                  >
+                    Fresh questions
+                  </button>
+                )}
+                <span className="check__hint tnum">{resumable ? "saved · picks up where you left off" : hint}</span>
               </div>
 
               {quizError && <p className="res__error">{quizError}</p>}
