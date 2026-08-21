@@ -5,7 +5,6 @@ import { ST, glyphOr } from "../graph/status";
 import { C, fmt, numeral, plural } from "../lib/format";
 import { buildAiModeUrl } from "../llm/librarian";
 import { isHttpUrl } from "../resources/verify";
-import { Quiz } from "./Quiz";
 import type { Question, Result } from "../quiz/types";
 import {
   overallStrength,
@@ -95,10 +94,8 @@ interface Props {
   addError?: string | null;
   /** Quiz wiring. The panel renders; the host owns generation, marking and persistence. */
   onTakeQuiz?: (nodeId: string, opts?: { fresh?: boolean }) => void;
-  onSubmitQuiz?: (nodeId: string, answers: Record<string, string>) => void;
-  onCloseQuiz?: () => void;
-  onQuizAnswersChange?: (nodeId: string, answers: Record<string, string>) => void;
-  quiz?: QuizState | null;
+  /** True while the quiz modal is showing this card's quiz. */
+  quizOpen?: boolean;
   /** A cached, un-submitted quiz is waiting for this card. */
   quizResumable?: boolean;
   quizLoading?: boolean;
@@ -120,10 +117,7 @@ export function NodeDetail({
   addingId = null,
   addError = null,
   onTakeQuiz,
-  onSubmitQuiz,
-  onCloseQuiz,
-  onQuizAnswersChange,
-  quiz: quizState = null,
+  quizOpen = false,
   quizResumable = false,
   quizLoading = false,
   quizError = null,
@@ -173,8 +167,6 @@ export function NodeDetail({
   }
 
   const rubric = check?.rubric ?? [];
-  // A quiz belongs to the card it was written for; selecting elsewhere puts it away.
-  const quiz = quizState && quizState.nodeId === node.id ? quizState : null;
   const searching = findingId === node.id;
   const adding = addingId === node.id;
   const linkDraft = linkDrafts[node.id] ?? "";
@@ -182,7 +174,7 @@ export function NodeDetail({
   // "add anyway" only makes sense once there is a real failed attempt to override, and only for
   // the same URL still sitting in the box — editing it should clear the offer, not carry it over.
   const canForceAdd = Boolean(addError) && !adding && draftLooksLikeAUrl && node.type !== "DECISION";
-  const resumable = quizResumable && !quiz;
+  const resumable = quizResumable && !quizOpen;
 
   const hint = gated
     ? `shut · chapter ${numeral(chapterIndex, arabic)} is not yet open`
@@ -272,24 +264,14 @@ export function NodeDetail({
         <section className="check">
           <h3 className="sect__h">Test your knowledge</h3>
 
-          {quiz ? (
-            <Quiz
-              key={`${node.id}:${quiz.questions.map((q) => q.id).join(",")}`}
-              questions={quiz.questions}
-              results={quiz.results}
-              marking={quiz.marking}
-              initialAnswers={quiz.answers}
-              onAnswersChange={(answers) => onQuizAnswersChange?.(node.id, answers)}
-              onSubmit={(answers) => onSubmitQuiz?.(node.id, answers)}
-              onClose={() => onCloseQuiz?.()}
-              onRetake={() => onTakeQuiz?.(node.id)}
-            />
-          ) : (
+          {
             <>
               <p className="check__lede">
-                {mastery && mastery.quizzes > 0
-                  ? "Atlas remembers where you slipped. The next quiz leans on those."
-                  : "A short quiz, written for this card. Atlas marks it and remembers what to drill."}
+                {quizOpen
+                  ? "The quiz is open."
+                  : mastery && mastery.quizzes > 0
+                    ? "Atlas remembers where you slipped. The next quiz leans on those."
+                    : "A short quiz, written for this card. Atlas marks it and remembers what to drill."}
               </p>
 
               {mastery && mastery.concepts.length > 0 && (
@@ -297,10 +279,22 @@ export function NodeDetail({
               )}
 
               <div className="check__actions">
-                <button className="btn" disabled={barred || quizLoading} onClick={() => onTakeQuiz?.(node.id)}>
-                  {quizLoading ? "Writing the quiz…" : resumable ? "Resume quiz" : mastery && mastery.quizzes > 0 ? "Take another quiz" : "Take a quiz"}
+                <button
+                  className="btn"
+                  disabled={barred || quizLoading || quizOpen}
+                  onClick={() => onTakeQuiz?.(node.id)}
+                >
+                  {quizLoading
+                    ? "Writing the quiz…"
+                    : quizOpen
+                      ? "Quiz open"
+                      : resumable
+                        ? "Resume quiz"
+                        : mastery && mastery.quizzes > 0
+                          ? "Take another quiz"
+                          : "Take a quiz"}
                 </button>
-                {resumable && (
+                {resumable && !quizOpen && (
                   <button
                     className="btn btn--quiet"
                     disabled={barred || quizLoading}
@@ -324,7 +318,7 @@ export function NodeDetail({
                 <p className="check__prompt">{check.prompt}</p>
               </details>
             </>
-          )}
+          }
         </section>
       )}
 

@@ -44,37 +44,42 @@ export function Quiz({
 
     return (
       <div className="quiz">
-        <div
-          className="quiz__verdict"
-          style={{
-            borderColor: passed ? C("--at-passed") : C("--at-progress"),
-            color: passed ? C("--at-passed") : C("--at-progress"),
-          }}
-        >
-          <div className="quiz__verdict-h">
-            {passed ? "Passed" : "Not yet"} · {score} of {results.length}
+        <div className="quiz__body">
+          <div
+            className="quiz__verdict"
+            style={{
+              borderColor: passed ? C("--at-passed") : C("--at-progress"),
+              color: passed ? C("--at-passed") : C("--at-progress"),
+            }}
+          >
+            <div className="quiz__verdict-h">
+              {passed ? "Passed" : "Not yet"} · {score} of {results.length}
+            </div>
+            <div className="quiz__verdict-b">
+              {passed
+                ? "That clears the bar for this card. What you missed is still recorded, and the next quiz will come back to it."
+                : "Atlas has noted which ideas slipped. The next quiz will weight them more heavily and keep the rest in rotation."}
+            </div>
           </div>
-          <div className="quiz__verdict-b">
-            {passed
-              ? "That clears the bar for this card. What you missed is still recorded, and the next quiz will come back to it."
-              : "Atlas has noted which ideas slipped. The next quiz will weight them more heavily and keep the rest in rotation."}
-          </div>
+
+          <ul className="quiz__results">
+            {results.map((r) => (
+              <li
+                key={r.question.id}
+                className={r.correct ? "quiz__result is-ok" : "quiz__result is-bad"}
+              >
+                <div className="quiz__result-top">
+                  <span className="quiz__mark">{r.correct ? "◈" : "✕"}</span>
+                  <span className="quiz__concept">{r.question.concept}</span>
+                </div>
+                <p className="quiz__q">{r.question.prompt}</p>
+                <p className="quiz__fb">{r.feedback}</p>
+              </li>
+            ))}
+          </ul>
         </div>
 
-        <ul className="quiz__results">
-          {results.map((r) => (
-            <li key={r.question.id} className={r.correct ? "quiz__result is-ok" : "quiz__result is-bad"}>
-              <div className="quiz__result-top">
-                <span className="quiz__mark">{r.correct ? "◈" : "✕"}</span>
-                <span className="quiz__concept">{r.question.concept}</span>
-              </div>
-              <p className="quiz__q">{r.question.prompt}</p>
-              <p className="quiz__fb">{r.feedback}</p>
-            </li>
-          ))}
-        </ul>
-
-        <div className="check__actions">
+        <div className="quiz__foot">
           <button className="btn" onClick={onRetake}>
             Another quiz
           </button>
@@ -88,47 +93,53 @@ export function Quiz({
 
   return (
     <div className="quiz">
-      <ol className="quiz__list">
-        {questions.map((q, i) => (
-          <li key={q.id} className="quiz__item">
-            <div className="quiz__item-top">
-              <span className="quiz__num tnum">{i + 1}</span>
-              <span className="quiz__concept">{q.concept}</span>
-            </div>
-            <p className="quiz__q">{q.prompt}</p>
-
-            {q.kind === "mcq" && q.options ? (
-              <div className="quiz__options">
-                {q.options.map((opt, oi) => (
-                  <label
-                    key={oi}
-                    className={answers[q.id] === String(oi) ? "quiz__opt is-picked" : "quiz__opt"}
-                  >
-                    <input
-                      type="radio"
-                      name={q.id}
-                      checked={answers[q.id] === String(oi)}
-                      onChange={() => record(q.id, String(oi))}
-                    />
-                    <span>{opt}</span>
-                  </label>
-                ))}
+      <div className="quiz__body">
+        <ol className="quiz__list">
+          {questions.map((q, i) => (
+            <li key={q.id} className="quiz__item">
+              <div className="quiz__item-top">
+                <span className="quiz__num tnum">{i + 1}</span>
+                <span className="quiz__concept">{q.concept}</span>
               </div>
-            ) : (
-              <textarea
-                className="ta"
-                rows={3}
-                placeholder="A sentence or two."
-                value={answers[q.id] ?? ""}
-                onChange={(e) => record(q.id, e.target.value)}
-              />
-            )}
-          </li>
-        ))}
-      </ol>
+              <p className="quiz__q">{q.prompt}</p>
 
-      <div className="check__actions">
-        <button className="btn" disabled={marking || answered === 0} onClick={() => onSubmit(answers)}>
+              {q.kind === "mcq" && q.options.length > 0 ? (
+                <div className="quiz__options">
+                  {q.options.map((opt, oi) => (
+                    <label
+                      key={oi}
+                      className={answers[q.id] === String(oi) ? "quiz__opt is-picked" : "quiz__opt"}
+                    >
+                      <input
+                        type="radio"
+                        name={q.id}
+                        checked={answers[q.id] === String(oi)}
+                        onChange={() => record(q.id, String(oi))}
+                      />
+                      <span>{opt}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <textarea
+                  className="ta"
+                  rows={3}
+                  placeholder="A sentence or two."
+                  value={answers[q.id] ?? ""}
+                  onChange={(e) => record(q.id, e.target.value)}
+                />
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="quiz__foot">
+        <button
+          className="btn"
+          disabled={marking || answered === 0}
+          onClick={() => onSubmit(answers)}
+        >
           {marking ? "Marking…" : "Submit"}
         </button>
         <button className="btn btn--quiet" disabled={marking} onClick={onClose}>

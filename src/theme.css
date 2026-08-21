@@ -1915,3 +1915,143 @@ button {
   color: var(--at-dim);
   font-style: italic;
 }
+
+/* ── modal ─────────────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  background: color-mix(in srgb, #000 62%, transparent);
+  animation: modal-in 0.16s ease-out;
+}
+
+body[data-ground="soft"] .modal-backdrop {
+  background: color-mix(in srgb, #2d2b2b 42%, transparent);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(820px, 100%);
+  min-height: 0;
+  background: var(--at-panel);
+  border: 1px solid var(--at-rule);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.44);
+  overflow: hidden;
+}
+
+.modal__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--at-rule);
+  background: var(--at-surface);
+}
+
+.modal__titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.modal__kicker {
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--at-faint);
+  margin-bottom: 6px;
+}
+
+.modal__title {
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 25px;
+  line-height: 1.16;
+  letter-spacing: -0.012em;
+  color: var(--at-ink);
+}
+
+.modal__x {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--at-rule);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--at-dim);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal__x:hover:not(:disabled) {
+  background: var(--at-gold-ghost);
+  color: var(--at-gold);
+  border-color: var(--at-gold);
+}
+.modal__x:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The quiz fills the modal: questions scroll, the actions stay put. */
+.modal--quiz .quiz {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.quiz__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 24px 8px;
+}
+
+.quiz__foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+  border-top: 1px solid var(--at-rule);
+  background: var(--at-surface);
+}
+
+/* Roomier than the 404px panel allowed — this is why the quiz moved out. */
+.modal--quiz .quiz__q {
+  font-size: 15.5px;
+  line-height: 1.55;
+}
+
+.modal--quiz .quiz__opt {
+  padding: 10px 13px;
+  font-size: 14px;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop {
+    animation: none;
+  }
+}

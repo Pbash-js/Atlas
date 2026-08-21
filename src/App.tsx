@@ -25,9 +25,10 @@ import { applyPatch } from "./graph/mutate";
 import { validateGraph } from "./schema/validate";
 import { GeminiModel } from "./llm/model";
 import { isHttpUrl, isReachable, titleFromUrl } from "./resources/verify";
-import { fmt } from "./lib/format";
+import { fmt, numeral } from "./lib/format";
 import { noticeId, NOTICE_TTL_MS, type Notice } from "./lib/notice";
 import type { QuizState } from "./panel/NodeDetail";
+import { QuizModal } from "./panel/QuizModal";
 import { generateQuiz, assess } from "./llm/examiner";
 import { PASS_RATIO } from "./quiz/types";
 import {
@@ -519,6 +520,15 @@ export default function App() {
 
   const sealed = planModel?.chapters.chapters.filter((c) => c.sealed).length ?? 0;
   const selected = current?.graph.nodes.find((n) => n.id === selectedId) ?? null;
+
+  // The modal is titled by the card it belongs to, which is not necessarily the selected one —
+  // the quiz stays open and correctly labelled even if the selection moves behind it.
+  const quizNode = quiz ? (current?.graph.nodes.find((n) => n.id === quiz.nodeId) ?? null) : null;
+  const quizChapter = quiz ? planModel?.chapters.chapterOf.get(quiz.nodeId) : undefined;
+  const quizChapterLabel =
+    quizChapter !== undefined && planModel
+      ? `Chapter ${numeral(quizChapter, ARABIC)} · ${planModel.chapters.chapters[quizChapter]?.title ?? ""}`
+      : "";
   const showRecord = screen === "plan" && planModel !== null;
 
   return (
@@ -623,10 +633,7 @@ export default function App() {
                 addingId={addingId}
                 addError={addError}
                 onTakeQuiz={handleTakeQuiz}
-                onSubmitQuiz={handleSubmitQuiz}
-                onCloseQuiz={() => setQuiz(null)}
-                onQuizAnswersChange={handleQuizAnswersChange}
-                quiz={quiz}
+                quizOpen={quiz?.nodeId === selectedId}
                 quizResumable={quizResumable}
                 quizLoading={quizLoading}
                 quizError={quizError}
@@ -669,6 +676,22 @@ export default function App() {
           />
         )}
       </main>
+
+      {quiz && quizNode && (
+        <QuizModal
+          key={`${quiz.nodeId}:${quiz.questions.map((q) => q.id).join(",")}`}
+          title={quizNode.title}
+          chapter={quizChapterLabel}
+          questions={quiz.questions}
+          results={quiz.results}
+          marking={quiz.marking}
+          initialAnswers={quiz.answers}
+          onAnswersChange={(answers) => handleQuizAnswersChange(quiz.nodeId, answers)}
+          onSubmit={(answers) => handleSubmitQuiz(quiz.nodeId, answers)}
+          onClose={() => setQuiz(null)}
+          onRetake={() => handleTakeQuiz(quiz.nodeId)}
+        />
+      )}
     </div>
   );
 }
