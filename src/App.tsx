@@ -9,6 +9,7 @@ import { Chronicle } from "./screens/Chronicle";
 import { Intake } from "./screens/Intake";
 import { Generating } from "./screens/Generating";
 import {
+  addManualResource,
   listPlans,
   savePlan,
   seedOnce,
@@ -19,6 +20,7 @@ import {
 import { architect, type ArchitectInput, type Phase } from "./llm/architect";
 import { findResources } from "./llm/librarian";
 import { GeminiModel } from "./llm/model";
+import { isHttpUrl, isReachable, titleFromUrl } from "./resources/verify";
 import { fmt } from "./lib/format";
 
 type Screen = "home" | "plan" | "chronicle" | "intake" | "generating";
@@ -58,6 +60,9 @@ export default function App() {
 
   const [findingId, setFindingId] = useState<string | null>(null);
   const [findError, setFindError] = useState<string | null>(null);
+
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
@@ -142,6 +147,71 @@ export default function App() {
       } finally {
         setFindingId(null);
       }
+    },
+    [current],
+  );
+
+  /**
+   * The hand-off path: the user opened Google AI Mode themselves, found a link, and pasted it
+   * back. There is no Gemini call in this path at all — checking reachability and writing the
+   * resource are both purely local, which is what makes this work with no key and no quota.
+   */
+  const handleAddResource = useCallback(
+    async (nodeId: string, rawUrl: string): Promise<boolean> => {
+      const plan = current;
+      if (!plan) return false;
+
+      const url = rawUrl.trim();
+      if (!isHttpUrl(url)) {
+        setAddError("That doesn't look like a link.");
+        return false;
+      }
+
+      setAddError(null);
+      setAddingId(nodeId);
+      try {
+        const reachable = await isReachable(url);
+        if (!reachable) {
+          setAddError("Could not reach that link. Check it, or add it anyway if you're sure.");
+          return false;
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        addManualResource(plan.graph, nodeId, {
+          url,
+          title: titleFromUrl(url),
+          kind: "text",
+          minutes: 20,
+          cost: 0,
+          verified: today,
+          status: "ok",
+        });
+        setPlans(listPlans());
+        return true;
+      } finally {
+        setAddingId(null);
+      }
+    },
+    [current],
+  );
+
+  /** The "add it anyway" escape hatch for a false-negative reachability check — see verify.ts. */
+  const handleAddResourceForced = useCallback(
+    (nodeId: string, rawUrl: string) => {
+      const plan = current;
+      const url = rawUrl.trim();
+      if (!plan || !isHttpUrl(url)) return;
+
+      setAddError(null);
+      addManualResource(plan.graph, nodeId, {
+        url,
+        title: titleFromUrl(url),
+        kind: "text",
+        minutes: 20,
+        cost: 0,
+        verified: null,
+        status: "unverified",
+      });
+      setPlans(listPlans());
     },
     [current],
   );
@@ -269,6 +339,10 @@ export default function App() {
                 onFindResources={handleFindResources}
                 findingId={findingId}
                 findError={findError}
+                onAddResource={handleAddResource}
+                onAddResourceForced={handleAddResourceForced}
+                addingId={addingId}
+                addError={addError}
               />
             </>
           ) : (

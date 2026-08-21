@@ -3,6 +3,8 @@ import type { AtlasGraph, AtlasNode } from "../schema/atlas";
 import type { PlanModel } from "../graph/model";
 import { ST, glyphOr } from "../graph/status";
 import { C, fmt, numeral, plural } from "../lib/format";
+import { buildAiModeUrl } from "../llm/librarian";
+import { isHttpUrl } from "../resources/verify";
 
 type Verdict = "passed" | "short" | null;
 
@@ -26,6 +28,12 @@ interface Props {
   /** Node id currently being searched, so the button can show progress. */
   findingId?: string | null;
   findError?: string | null;
+  /** The hand-off path: check a pasted link is reachable, then save it. Resolves true on success. */
+  onAddResource?: (nodeId: string, url: string) => Promise<boolean>;
+  /** Save the link despite a failed reachability check — the user's own eyes outrank the probe. */
+  onAddResourceForced?: (nodeId: string, url: string) => void;
+  addingId?: string | null;
+  addError?: string | null;
 }
 
 export function NodeDetail({
@@ -37,8 +45,13 @@ export function NodeDetail({
   onFindResources,
   findingId = null,
   findError = null,
+  onAddResource,
+  onAddResourceForced,
+  addingId = null,
+  addError = null,
 }: Props) {
   const [attempts, setAttempts] = useState<Record<string, Attempt>>({});
+  const [linkDrafts, setLinkDrafts] = useState<Record<string, string>>({});
 
   if (!node) {
     return (
@@ -97,6 +110,12 @@ export function NodeDetail({
   const rubric = check?.rubric ?? [];
   const ticked = rubric.filter((_, i) => attempt.ticks[i]).length;
   const searching = findingId === node.id;
+  const adding = addingId === node.id;
+  const linkDraft = linkDrafts[node.id] ?? "";
+  const draftLooksLikeAUrl = isHttpUrl(linkDraft.trim());
+  // "add anyway" only makes sense once there is a real failed attempt to override, and only for
+  // the same URL still sitting in the box — editing it should clear the offer, not carry it over.
+  const canForceAdd = Boolean(addError) && !adding && draftLooksLikeAUrl && node.type !== "DECISION";
 
   const hint = attempt.open
     ? `${ticked} of ${rubric.length} marked`
@@ -282,8 +301,8 @@ export function NodeDetail({
         <h3 className="sect__h">Resources</h3>
         {resources.length === 0 ? (
           <p className="none">
-            Nothing shelved here yet. Atlas can search the web for what practitioners currently
-            recommend for this step.
+            Nothing shelved here yet. Open Google AI Mode for a tailored search, or let Atlas
+            search the web itself.
           </p>
         ) : (
           <ul className="ulist">
@@ -301,6 +320,64 @@ export function NodeDetail({
           </ul>
         )}
 
+        {node.type !== "DECISION" && (
+          <div className="res__handoff">
+            <a
+              className="btn btn--quiet"
+              href={buildAiModeUrl({ node, goalStatement: graph.goal.statement })}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open in Google AI Mode ↗
+            </a>
+            <span className="check__hint">No key needed · opens in a new tab</span>
+          </div>
+        )}
+
+        {onAddResource && node.type !== "DECISION" && (
+          <form
+            className="res__addrow"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              if (!linkDraft.trim() || adding) return;
+              void onAddResource(node.id, linkDraft).then((ok) => {
+                if (ok) setLinkDrafts((prev) => ({ ...prev, [node.id]: "" }));
+              });
+            }}
+          >
+            <input
+              type="url"
+              className="res__addinput"
+              placeholder="Paste a link you found…"
+              value={linkDraft}
+              disabled={adding}
+              onChange={(e) =>
+                setLinkDrafts((prev) => ({ ...prev, [node.id]: e.target.value }))
+              }
+            />
+            <button className="btn btn--quiet" type="submit" disabled={adding || !linkDraft.trim()}>
+              {adding ? "Checking…" : "Add"}
+            </button>
+          </form>
+        )}
+
+        {addError && !adding && (
+          <p className="res__error">
+            {addError}
+            {canForceAdd && onAddResourceForced && (
+              <button
+                className="linkbtn-inline"
+                onClick={() => {
+                  onAddResourceForced(node.id, linkDraft);
+                  setLinkDrafts((prev) => ({ ...prev, [node.id]: "" }));
+                }}
+              >
+                Add it anyway
+              </button>
+            )}
+          </p>
+        )}
+
         {onFindResources && node.type !== "DECISION" && (
           <div className="res__find">
             <button
@@ -312,7 +389,7 @@ export function NodeDetail({
                 ? "Searching the web…"
                 : resources.length
                   ? "Search again"
-                  : "Find resources"}
+                  : "Or let Atlas search for you"}
             </button>
             {searching && (
               <span className="check__hint">Reading forums and reviews · up to a minute</span>

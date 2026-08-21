@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toResources, buildPrompt, findResources } from "../src/llm/librarian";
+import { toResources, buildPrompt, buildAiModeUrl, findResources } from "../src/llm/librarian";
 import { testConnection, QuotaError, type ReasoningModel } from "../src/llm/model";
 import type { UnitNode } from "../src/schema/atlas";
 
@@ -112,6 +112,28 @@ describe("prompt", () => {
     expect(prompt).toContain("Structured Streaming checkpointing");
     expect(prompt).toContain("checkpointLocation is set");
     expect(prompt).toContain("90 minutes");
+  });
+});
+
+describe("buildAiModeUrl — the no-key hand-off path", () => {
+  it("targets Google's AI Mode via the udm=50 parameter", () => {
+    const url = new URL(buildAiModeUrl({ node, goalStatement: "Price options on a live stream" }));
+    expect(url.hostname).toBe("www.google.com");
+    expect(url.pathname).toBe("/search");
+    expect(url.searchParams.get("udm")).toBe("50");
+  });
+
+  it("asks a natural-language question naming the node and the goal", () => {
+    const url = new URL(buildAiModeUrl({ node, goalStatement: "Price options on a live stream" }));
+    const q = url.searchParams.get("q") ?? "";
+    expect(q).toContain(node.title);
+    expect(q).toContain("Price options on a live stream");
+  });
+
+  it("nudges toward community sources, matching the Librarian's own prompt", () => {
+    const url = new URL(buildAiModeUrl({ node, goalStatement: "Learn Rust" }));
+    const q = url.searchParams.get("q") ?? "";
+    expect(q.toLowerCase()).toContain("reddit");
   });
 });
 

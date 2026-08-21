@@ -1,11 +1,20 @@
 import { z } from "zod";
 import type { Resource, UnitNode, RecoveryNode } from "../schema/atlas";
 import { extractJson, QuotaError, type ReasoningModel } from "./model";
+import { urlKey } from "../resources/verify";
 
 /**
- * The Librarian: find real, well-regarded resources for one node.
+ * Two ways to find resources for one node, and they end at the same shape.
  *
- * The whole point of routing this through live web search rather than model recall is that a
+ * The automatic path (`findResources`) asks Gemini to search the web itself. That needs a
+ * billing-enabled key — grounded search is metered separately from plan drafting, and Google
+ * refuses it outright on a free-tier key. `buildAiModeUrl` is the fallback that needs no key at
+ * all: it hands the same question to Google's own AI Mode in a new tab and lets the person doing
+ * the research complete the loop by pasting a link back (see resources/verify.ts for how that
+ * link then gets checked). Neither path is decoration for the other — the second one is what
+ * makes resource discovery work for every visitor, not just ones with a paid key.
+ *
+ * The whole point of routing either path through live search rather than model recall is that a
  * plausible-looking dead URL destroys trust in the entire graph on the very first card. A model
  * asked from memory will happily invent a course that never existed; a grounded search returns
  * things that are actually indexed today.
@@ -66,20 +75,6 @@ export interface LibrarianInput {
   goalStatement: string;
 }
 
-/** Normalise a URL for comparison — trailing slashes and tracking params are not differences. */
-function urlKey(raw: string): string {
-  try {
-    const u = new URL(raw);
-    u.hash = "";
-    for (const p of [...u.searchParams.keys()]) {
-      if (/^utm_|^ref$|^source$/i.test(p)) u.searchParams.delete(p);
-    }
-    return `${u.host.replace(/^www\./, "")}${u.pathname.replace(/\/$/, "")}${u.search}`.toLowerCase();
-  } catch {
-    return raw.trim().toLowerCase();
-  }
-}
-
 export function buildPrompt({ node, goalStatement }: LibrarianInput): string {
   const rubric = node.exit_check?.rubric ?? [];
   return [
@@ -94,6 +89,31 @@ export function buildPrompt({ node, goalStatement }: LibrarianInput): string {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * A deep link into Google's AI Mode (`udm=50` — the parameter Google's own search UI uses to open
+ * that tab; confirmed against Google's current URL scheme, not guessed) with a conversational
+ * question built the same way `buildPrompt` frames one for Gemini: what the node needs, why, and
+ * a nudge toward community sources over SEO listicles. AI Mode is built for natural-language
+ * questions rather than keywords, so the query reads as a sentence, not a keyword string.
+ *
+ * This never touches the network itself — it only builds the URL. The tab it opens is Google's
+ * own page, running the search under the visitor's own Google session, at no cost to this app
+ * and with no key required at all. That is what makes it the fallback that works for everyone.
+ */
+export function buildAiModeUrl({ node, goalStatement }: LibrarianInput): string {
+  const query = [
+    `What are the best, most up-to-date, well-reviewed resources for "${node.title}"`,
+    `as part of learning to: ${goalStatement}?`,
+    `Prefer recent, positively-reviewed recommendations from Reddit, Hacker News, Medium, or the`,
+    `relevant community — not SEO listicles.`,
+  ].join(" ");
+
+  const url = new URL("https://www.google.com/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("udm", "50");
+  return url.toString();
 }
 
 /**

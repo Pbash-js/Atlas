@@ -1,5 +1,6 @@
 import type { AtlasGraph, Resource } from "../schema/atlas";
 import { validateGraph } from "../schema/validate";
+import { urlKey } from "../resources/verify";
 import golden from "../../fixtures/golden-bs-streaming.json";
 
 /**
@@ -92,6 +93,40 @@ export function setNodeResources(
         type: "resource_swapped" as const,
         node: nodeId,
         detail: `${resources.length} resource${resources.length === 1 ? "" : "s"} found by web search`,
+      },
+    ],
+  };
+
+  savePlan(next);
+  return next;
+}
+
+/**
+ * Add one resource the user found themselves — via the "Open in Google AI Mode" hand-off, or from
+ * anywhere else — and persist the plan. Appends rather than replaces: a manual add is "here is one
+ * more thing I found," not "throw away what was there," which is the opposite intent from a fresh
+ * Librarian search. De-duplicates by normalised URL so pasting the same link twice is a no-op.
+ */
+export function addManualResource(graph: AtlasGraph, nodeId: string, resource: Resource): AtlasGraph {
+  const target = graph.nodes.find((n) => n.id === nodeId);
+  if (!target || target.type === "DECISION") return graph;
+
+  const key = urlKey(resource.url);
+  const already = target.resources.some((r) => urlKey(r.url) === key);
+  if (already) return graph;
+
+  const next: AtlasGraph = {
+    ...graph,
+    nodes: graph.nodes.map((n) =>
+      n.id === nodeId && n.type !== "DECISION" ? { ...n, resources: [...n.resources, resource] } : n,
+    ),
+    events: [
+      ...graph.events,
+      {
+        at: new Date().toISOString(),
+        type: "resource_swapped" as const,
+        node: nodeId,
+        detail: "added by hand, after Google AI Mode",
       },
     ],
   };

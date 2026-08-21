@@ -1575,12 +1575,48 @@ button {
   color: var(--at-failed);
 }
 
+.res__handoff {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--at-rule-soft);
+}
+
+.res__addrow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.res__addinput {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--at-raised);
+  color: var(--at-ink);
+  border: 1px solid var(--at-rule);
+  border-radius: var(--radius-md);
+  padding: 8px 11px;
+  font-size: 13.5px;
+}
+.res__addinput:focus {
+  border-color: var(--at-gold);
+}
+.res__addinput:disabled {
+  opacity: 0.55;
+}
+
 .res__find {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
   margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--at-rule-soft);
 }
 
 .res__error {
@@ -1591,4 +1627,21 @@ button {
   color: var(--at-dim);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.linkbtn-inline {
+  display: inline;
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--at-gold);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.linkbtn-inline:hover {
+  color: var(--at-gold-lift);
 }
