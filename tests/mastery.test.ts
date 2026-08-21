@@ -128,6 +128,27 @@ describe("chooseFocus", () => {
     expect(strong.length).toBeGreaterThan(0);
   });
 
+  it("reserves the rotation slot for solid work even when weak concepts outnumber it", () => {
+    // Five weak, one strong, asking for three: the two drill slots take the weakest, and the one
+    // rotation slot must still go to the strong concept rather than to a fourth weak one.
+    const lopsided: NodeMastery = {
+      nodeId: "n1",
+      quizzes: 4,
+      lastQuiz: new Date().toISOString(),
+      concepts: [
+        concept("w1", 0.1),
+        concept("w2", 0.12),
+        concept("w3", 0.15),
+        concept("w4", 0.18),
+        concept("w5", 0.2),
+        concept("solid", 0.95),
+      ],
+    };
+
+    const { rotate } = chooseFocus(lopsided, 3);
+    expect(rotate).toContain("solid");
+  });
+
   it("never asks for more concepts than it has", () => {
     const { drill, rotate } = chooseFocus(mastery(), 5);
     expect(drill.length + rotate.length).toBeLessThanOrEqual(5);

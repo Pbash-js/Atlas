@@ -166,14 +166,25 @@ export function chooseFocus(mastery: NodeMastery, count: number, now = Date.now(
   if (mastery.concepts.length === 0) return { drill: [], rotate: [] };
 
   const ranked = [...mastery.concepts].sort((a, b) => weightOf(b, now) - weightOf(a, now));
-  const drillCount = Math.min(ranked.length, Math.max(1, Math.ceil(count * DRILL_SHARE)));
+  // Cap drilling at count-1 so a rotation slot genuinely survives. Without the cap, rounding ate
+  // it whole at small counts — ceil(3 * 0.7) is 3, which left nothing to rotate at all.
+  const drillCount = Math.min(
+    ranked.length,
+    Math.max(1, Math.min(Math.ceil(count * DRILL_SHARE), count - 1)),
+  );
 
   const drill = ranked.slice(0, drillCount);
   const remaining = ranked.slice(drillCount);
 
-  // Fill the rotation slots with whatever has gone longest without being asked.
+  // Rotation slots go to the STRONGEST remaining concepts, with staleness only as a tie-break.
+  // Ordering by staleness alone handed these slots to more weak material whenever weak concepts
+  // outnumbered the drill slots — which is exactly when the reserved slot matters most.
   const rotate = [...remaining]
-    .sort((a, b) => new Date(a.lastSeen).getTime() - new Date(b.lastSeen).getTime())
+    .sort((a, b) => {
+      const byStrength = b.strength - a.strength;
+      if (byStrength !== 0) return byStrength;
+      return new Date(a.lastSeen).getTime() - new Date(b.lastSeen).getTime();
+    })
     .slice(0, Math.max(0, count - drillCount));
 
   return { drill: drill.map((c) => c.concept), rotate: rotate.map((c) => c.concept) };

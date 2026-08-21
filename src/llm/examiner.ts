@@ -116,6 +116,42 @@ export async function generateQuiz(
   return usable.slice(0, count);
 }
 
+/**
+ * A plan-wide test: several cards, a couple of questions each.
+ *
+ * Cards are generated in PARALLEL rather than in one big call. Two reasons, and both matter.
+ * Concept labels only stay stable when the generator sees one card's own history at a time — a
+ * single combined prompt would blur them across cards and mastery would stop accumulating. And
+ * running them concurrently means a four-card test costs about the same wall time as a one-card
+ * quiz instead of four times as much.
+ *
+ * A card that fails to generate is dropped rather than failing the whole test; only an empty
+ * result is an error.
+ */
+export async function generatePlanQuiz(
+  model: ReasoningModel,
+  requests: QuizRequest[],
+  signal?: AbortSignal,
+): Promise<{ nodeId: string; questions: Question[] }[]> {
+  const settled = await Promise.allSettled(
+    requests.map((req) => generateQuiz(model, req, signal)),
+  );
+
+  const out: { nodeId: string; questions: Question[] }[] = [];
+  settled.forEach((result, i) => {
+    const req = requests[i];
+    if (!req) return;
+    if (result.status === "fulfilled" && result.value.length > 0) {
+      out.push({ nodeId: req.node.id, questions: result.value });
+    }
+  });
+
+  if (out.length === 0) {
+    throw new Error("The test could not be written — no card produced usable questions.");
+  }
+  return out;
+}
+
 /** Deterministic half of marking: MCQ by index comparison. No model, no ambiguity. */
 export function gradeObjective(question: Question, given: string): Result | null {
   if (question.kind !== "mcq" || !question.options) return null;

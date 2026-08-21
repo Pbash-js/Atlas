@@ -29,7 +29,7 @@ import { fmt, numeral } from "./lib/format";
 import { noticeId, NOTICE_TTL_MS, type Notice } from "./lib/notice";
 import type { QuizState } from "./panel/NodeDetail";
 import { QuizModal } from "./panel/QuizModal";
-import { generateQuiz, assess } from "./llm/examiner";
+import { generateQuiz, generatePlanQuiz, assess } from "./llm/examiner";
 import { PASS_RATIO } from "./quiz/types";
 import {
   applyResults,
@@ -39,14 +39,25 @@ import {
   type NodeMastery,
 } from "./quiz/mastery";
 import { fingerprintOf, getQuizCache, isUsable, newEntry } from "./quiz/cache";
+import { TestKnowledge } from "./screens/TestKnowledge";
+import {
+  chooseCards,
+  eligibleCards,
+  namespaceId,
+  splitId,
+  planQuizKey,
+  PLAN_QUIZ_PER_CARD,
+  type MasteryMap,
+} from "./quiz/planquiz";
 
-type Screen = "home" | "plan" | "chronicle" | "intake" | "generating";
+type Screen = "home" | "plan" | "chronicle" | "test" | "intake" | "generating";
 type Ground = "dark" | "soft";
 
 const VIEWS: { key: Screen; label: string }[] = [
   { key: "home", label: "Room" },
   { key: "plan", label: "Plan" },
   { key: "chronicle", label: "Chronicle" },
+  { key: "test", label: "Test" },
   { key: "intake", label: "New" },
 ];
 
@@ -89,6 +100,9 @@ export default function App() {
   const [quizError, setQuizError] = useState<string | null>(null);
   const [mastery, setMastery] = useState<NodeMastery | null>(null);
   const [quizResumable, setQuizResumable] = useState(false);
+  const [masteries, setMasteries] = useState<MasteryMap>(new Map());
+  const [planQuizLoading, setPlanQuizLoading] = useState(false);
+  const [planQuizError, setPlanQuizError] = useState<string | null>(null);
 
   /** How many questions a quiz asks. Short enough to actually finish in one sitting. */
   const QUIZ_LENGTH = 5;
@@ -391,6 +405,76 @@ export default function App() {
     };
   }, [selectedId, mastery, current, quiz]);
 
+  /**
+   * Mastery for every card in the plan, for the plan-wide test screen. Reloaded whenever the
+   * graph changes or a quiz settles, so the pool and its grasp bars never show stale numbers.
+   */
+  useEffect(() => {
+    let live = true;
+    if (!current) {
+      setMasteries(new Map());
+      return;
+    }
+    const store = getMasteryStore();
+    const ids = current.graph.nodes.filter((n) => n.type !== "DECISION").map((n) => n.id);
+    void Promise.all(ids.map(async (id) => [id, await store.load(id)] as const)).then((pairs) => {
+      if (live) setMasteries(new Map(pairs));
+    });
+    return () => {
+      live = false;
+    };
+  }, [current, quiz]);
+
+  /**
+   * Build a plan-wide test: choose the cards, then generate each card's questions in parallel and
+   * merge them. Question ids are namespaced by card, because two cards will both call their first
+   * question "q1" and marking keys on the id.
+   */
+  const handleStartPlanTest = useCallback(async () => {
+    const plan = current;
+    if (!plan || planQuizLoading) return;
+
+    const chosen = chooseCards(eligibleCards(plan.graph, masteries));
+    if (chosen.length === 0) return;
+
+    setPlanQuizError(null);
+    setPlanQuizLoading(true);
+    try {
+      const byId = new Map(plan.graph.nodes.map((n) => [n.id, n]));
+      const requests = chosen.flatMap((card) => {
+        const node = byId.get(card.nodeId);
+        if (!node || node.type === "DECISION") return [];
+        const existing = card.mastery ?? emptyMastery(card.nodeId);
+        return [
+          {
+            node,
+            goalStatement: plan.graph.goal.statement,
+            mastery: existing,
+            focus: chooseFocus(existing, PLAN_QUIZ_PER_CARD),
+            count: PLAN_QUIZ_PER_CARD,
+          },
+        ];
+      });
+
+      const generated = await generatePlanQuiz(model, requests);
+      const questions = generated.flatMap(({ nodeId, questions: qs }) =>
+        qs.map((q) => ({ ...q, id: namespaceId(nodeId, q.id) })),
+      );
+
+      setQuiz({
+        nodeId: planQuizKey(plan.id),
+        questions,
+        answers: {},
+        results: null,
+        marking: false,
+      });
+    } catch (err) {
+      setPlanQuizError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanQuizLoading(false);
+    }
+  }, [current, masteries, planQuizLoading]);
+
   const handleTakeQuiz = useCallback(
     async (nodeId: string, opts?: { fresh?: boolean }) => {
       const plan = current;
@@ -458,38 +542,64 @@ export default function App() {
       if (!plan || !quiz || quiz.nodeId !== nodeId) return;
 
       setQuiz({ ...quiz, marking: true });
+      setQuizError(null);
+      setPlanQuizError(null);
       try {
         const results = await assess(model, quiz.questions, answers);
-
-        // Record what was learned about each concept before anything else, so a failure to
-        // update the card's status cannot cost the learner their mastery history.
         const store = getMasteryStore();
-        const existing = (await store.load(nodeId)) ?? emptyMastery(nodeId);
-        const updated = applyResults(
-          existing,
-          results.map((r) => ({ concept: r.question.concept, correct: r.correct })),
-        );
-        await store.save(updated);
-        setMastery(updated);
+
+        // A plan-wide test carries questions from several cards, so results are grouped by the
+        // card their question id was namespaced with and each card's mastery is updated
+        // separately. A single-card quiz is just the one-group case of the same thing.
+        const isPlanTest = nodeId.startsWith(`plan${"::"}`);
+        const grouped = new Map<string, { concept: string; correct: boolean }[]>();
+
+        for (const r of results) {
+          const owner = isPlanTest ? splitId(r.question.id).nodeId : nodeId;
+          if (!owner) continue;
+          grouped.set(owner, [
+            ...(grouped.get(owner) ?? []),
+            { concept: r.question.concept, correct: r.correct },
+          ]);
+        }
+
+        // Record what was learned before anything else, so a failure to update card statuses
+        // cannot cost the learner their mastery history.
+        let graph = plan.graph;
+        let statusesMoved = false;
+
+        for (const [owner, graded] of grouped) {
+          const existing = (await store.load(owner)) ?? emptyMastery(owner);
+          const updated = applyResults(existing, graded);
+          await store.save(updated);
+          if (owner === selectedId) setMastery(updated);
+
+          const ratio = graded.filter((g) => g.correct).length / (graded.length || 1);
+          const node = graph.nodes.find((n) => n.id === owner);
+          if (ratio >= PASS_RATIO && node && node.status !== "passed") {
+            graph = markPassed(graph, owner);
+            statusesMoved = true;
+          }
+        }
+
+        if (statusesMoved) {
+          savePlan(graph);
+          setPlans(listPlans());
+        }
 
         // A marked quiz is spent. Clearing it here is belt-and-braces — the mastery update alone
         // already moves the fingerprint — but it means a stale entry never lingers in storage.
         await getQuizCache().clear(nodeId);
         setQuiz({ nodeId, questions: quiz.questions, results, marking: false });
-
-        const ratio = results.filter((r) => r.correct).length / (results.length || 1);
-        const node = plan.graph.nodes.find((n) => n.id === nodeId);
-        if (ratio >= PASS_RATIO && node && node.status !== "passed") {
-          const graded = markPassed(plan.graph, nodeId);
-          savePlan(graded);
-          setPlans(listPlans());
-        }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         setQuiz({ ...quiz, marking: false });
-        setQuizError(err instanceof Error ? err.message : String(err));
+        // Route to whichever error the open modal is actually reading, or the failure is silent.
+        if (nodeId.startsWith("plan::")) setPlanQuizError(message);
+        else setQuizError(message);
       }
     },
-    [current, quiz],
+    [current, quiz, selectedId],
   );
 
   const cancelDraw = useCallback(() => {
@@ -523,6 +633,7 @@ export default function App() {
 
   // The modal is titled by the card it belongs to, which is not necessarily the selected one —
   // the quiz stays open and correctly labelled even if the selection moves behind it.
+  const isPlanTest = Boolean(quiz && quiz.nodeId.startsWith("plan::"));
   const quizNode = quiz ? (current?.graph.nodes.find((n) => n.id === quiz.nodeId) ?? null) : null;
   const quizChapter = quiz ? planModel?.chapters.chapterOf.get(quiz.nodeId) : undefined;
   const quizChapterLabel =
@@ -571,7 +682,9 @@ export default function App() {
               <button
                 key={v.key}
                 className={screen === v.key ? "seg__btn is-active" : "seg__btn"}
-                disabled={(v.key === "plan" || v.key === "chronicle") && !current}
+                disabled={
+                  (v.key === "plan" || v.key === "chronicle" || v.key === "test") && !current
+                }
                 onClick={() => setScreen(v.key)}
               >
                 {v.label}
@@ -664,6 +777,25 @@ export default function App() {
             </div>
           ))}
 
+        {screen === "test" &&
+          (current ? (
+            <TestKnowledge
+              graph={current.graph}
+              masteries={masteries}
+              loading={planQuizLoading}
+              error={planQuizError}
+              onStart={handleStartPlanTest}
+              onOpenNode={openNode}
+            />
+          ) : (
+            <div className="scroll">
+              <div className="gen">
+                <div className="kicker">Test your knowledge</div>
+                <h2 className="gen__h">There is no plan to test yet.</h2>
+              </div>
+            </div>
+          ))}
+
         {screen === "intake" && <Intake initial={lastInput} onDraw={draw} />}
 
         {screen === "generating" && (
@@ -677,19 +809,20 @@ export default function App() {
         )}
       </main>
 
-      {quiz && quizNode && (
+      {quiz && (quizNode || isPlanTest) && (
         <QuizModal
           key={`${quiz.nodeId}:${quiz.questions.map((q) => q.id).join(",")}`}
-          title={quizNode.title}
-          chapter={quizChapterLabel}
+          title={isPlanTest ? (current?.graph.goal.statement ?? "The whole plan") : (quizNode?.title ?? "")}
+          chapter={isPlanTest ? "Test your knowledge · the whole plan" : quizChapterLabel}
           questions={quiz.questions}
           results={quiz.results}
           marking={quiz.marking}
+          error={isPlanTest ? planQuizError : quizError}
           initialAnswers={quiz.answers}
           onAnswersChange={(answers) => handleQuizAnswersChange(quiz.nodeId, answers)}
           onSubmit={(answers) => handleSubmitQuiz(quiz.nodeId, answers)}
           onClose={() => setQuiz(null)}
-          onRetake={() => handleTakeQuiz(quiz.nodeId)}
+          onRetake={() => (isPlanTest ? handleStartPlanTest() : handleTakeQuiz(quiz.nodeId))}
         />
       )}
     </div>

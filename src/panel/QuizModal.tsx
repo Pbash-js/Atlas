@@ -20,6 +20,7 @@ interface Props {
   questions: Question[];
   results: Result[] | null;
   marking: boolean;
+  error?: string | null;
   initialAnswers?: Record<string, string>;
   onAnswersChange?: (answers: Record<string, string>) => void;
   onSubmit: (answers: Record<string, string>) => void;

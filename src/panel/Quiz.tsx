@@ -7,6 +7,8 @@ interface Props {
   questions: Question[];
   results: Result[] | null;
   marking: boolean;
+  /** A failure from generation or marking. Must render HERE: the panel is behind the modal. */
+  error?: string | null;
   /** Answers restored from the cache, so a set-aside quiz resumes where it was left. */
   initialAnswers?: Record<string, string>;
   onAnswersChange?: (answers: Record<string, string>) => void;
@@ -19,6 +21,7 @@ export function Quiz({
   questions,
   results,
   marking,
+  error = null,
   initialAnswers,
   onAnswersChange,
   onSubmit,
@@ -133,6 +136,8 @@ export function Quiz({
           ))}
         </ol>
       </div>
+
+      {error && <p className="quiz__error">{error}</p>}
 
       <div className="quiz__foot">
         <button
