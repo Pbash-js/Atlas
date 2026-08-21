@@ -7,11 +7,23 @@
  * that expires, so it lives behind an interface with the id in one place.
  */
 
+/**
+ * A JSON Schema the model must fill. Passed straight through as `response_format`, which this
+ * endpoint accepts as the schema itself rather than as a wrapper — verified against the API's own
+ * rejection message, which enumerates the types it takes.
+ *
+ * With one of these the reply comes back as bare JSON with no prose and no code fences, which
+ * removes a whole class of parse failure. Without it, callers fall back to extractJson.
+ */
+export type JsonSchema = Record<string, unknown>;
+
 export interface GenerateRequest {
   system: string;
   input: string;
   /** Abort signal so a slow generation can be cancelled from the UI. */
   signal?: AbortSignal;
+  /** When set, the model is constrained to emit JSON matching this shape. */
+  schema?: JsonSchema;
 }
 
 /** A source the live web search actually returned, as opposed to one the model recalled. */
@@ -106,11 +118,19 @@ export class GeminiModel implements ReasoningModel {
     return (await res.json()) as GeminiResponse;
   }
 
-  async generate({ system, input, signal }: GenerateRequest): Promise<string> {
+  async generate({ system, input, signal, schema }: GenerateRequest): Promise<string> {
     const key = this.key ?? resolveKey();
     if (!key) throw new MissingKeyError();
 
-    const data = await this.call({ system_instruction: system, input }, signal, key);
+    const data = await this.call(
+      {
+        system_instruction: system,
+        input,
+        ...(schema ? { response_format: schema } : {}),
+      },
+      signal,
+      key,
+    );
     const text = textOf(data);
     if (!text.trim()) throw new Error("Gemini returned no text.");
     return text;

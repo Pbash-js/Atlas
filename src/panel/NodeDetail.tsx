@@ -5,17 +5,72 @@ import { ST, glyphOr } from "../graph/status";
 import { C, fmt, numeral, plural } from "../lib/format";
 import { buildAiModeUrl } from "../llm/librarian";
 import { isHttpUrl } from "../resources/verify";
+import { Quiz } from "./Quiz";
+import type { Question, Result } from "../quiz/types";
+import {
+  overallStrength,
+  strongConcepts,
+  weakConcepts,
+  type NodeMastery,
+} from "../quiz/mastery";
 
-type Verdict = "passed" | "short" | null;
-
-interface Attempt {
-  open: boolean;
-  ticks: Record<number, boolean>;
-  text: string;
-  verdict: Verdict;
+/** The live quiz for the open card: its questions, and its marks once submitted. */
+export interface QuizState {
+  nodeId: string;
+  questions: Question[];
+  results: Result[] | null;
+  marking: boolean;
 }
 
-const EMPTY: Attempt = { open: false, ticks: {}, text: "", verdict: null };
+function MasterySummary({ mastery }: { mastery: NodeMastery }) {
+  const overall = overallStrength(mastery);
+  const weak = weakConcepts(mastery).slice(0, 3);
+  const strong = strongConcepts(mastery).slice(0, 3);
+
+  return (
+    <div className="mastery">
+      <div className="mastery__bar">
+        <div
+          className="mastery__fill"
+          style={{ width: `${Math.round((overall ?? 0) * 100)}%` }}
+        />
+      </div>
+      <div className="mastery__meta tnum">
+        <span>{Math.round((overall ?? 0) * 100)}% grasp</span>
+        <span>
+          {mastery.quizzes} quiz{mastery.quizzes === 1 ? "" : "zes"} · {mastery.concepts.length}{" "}
+          concepts
+        </span>
+      </div>
+
+      {weak.length > 0 && (
+        <div className="mastery__group">
+          <span className="mastery__label" style={{ color: C("--at-failed") }}>
+            Shaky
+          </span>
+          {weak.map((c) => (
+            <span key={c.concept} className="mastery__chip is-weak">
+              {c.concept}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {strong.length > 0 && (
+        <div className="mastery__group">
+          <span className="mastery__label" style={{ color: C("--at-passed") }}>
+            Solid
+          </span>
+          {strong.map((c) => (
+            <span key={c.concept} className="mastery__chip is-strong">
+              {c.concept}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   graph: AtlasGraph;
@@ -34,6 +89,14 @@ interface Props {
   onAddResourceForced?: (nodeId: string, url: string) => void;
   addingId?: string | null;
   addError?: string | null;
+  /** Quiz wiring. The panel renders; the host owns generation, marking and persistence. */
+  onTakeQuiz?: (nodeId: string) => void;
+  onSubmitQuiz?: (nodeId: string, answers: Record<string, string>) => void;
+  onCloseQuiz?: () => void;
+  quiz?: QuizState | null;
+  quizLoading?: boolean;
+  quizError?: string | null;
+  mastery?: NodeMastery | null;
 }
 
 export function NodeDetail({
@@ -49,8 +112,14 @@ export function NodeDetail({
   onAddResourceForced,
   addingId = null,
   addError = null,
+  onTakeQuiz,
+  onSubmitQuiz,
+  onCloseQuiz,
+  quiz: quizState = null,
+  quizLoading = false,
+  quizError = null,
+  mastery = null,
 }: Props) {
-  const [attempts, setAttempts] = useState<Record<string, Attempt>>({});
   const [linkDrafts, setLinkDrafts] = useState<Record<string, string>>({});
 
   if (!node) {
@@ -64,19 +133,6 @@ export function NodeDetail({
       </aside>
     );
   }
-
-  const attempt = attempts[node.id] ?? EMPTY;
-  const patch = (p: Partial<Attempt>) =>
-    setAttempts((prev) => ({ ...prev, [node.id]: { ...(prev[node.id] ?? EMPTY), ...p } }));
-
-  // The tick must be derived inside the updater. Building it from the render closure loses
-  // ticks whenever two boxes are clicked inside one batch.
-  const toggleTick = (i: number) =>
-    setAttempts((prev) => {
-      const cur = prev[node.id] ?? EMPTY;
-      if (!cur.open) return prev;
-      return { ...prev, [node.id]: { ...cur, ticks: { ...cur.ticks, [i]: !cur.ticks[i] } } };
-    });
 
   const meta = ST[node.status];
   const gated = model.chapters.isGated(node.id);
@@ -108,7 +164,8 @@ export function NodeDetail({
   }
 
   const rubric = check?.rubric ?? [];
-  const ticked = rubric.filter((_, i) => attempt.ticks[i]).length;
+  // A quiz belongs to the card it was written for; selecting elsewhere puts it away.
+  const quiz = quizState && quizState.nodeId === node.id ? quizState : null;
   const searching = findingId === node.id;
   const adding = addingId === node.id;
   const linkDraft = linkDrafts[node.id] ?? "";
@@ -117,12 +174,12 @@ export function NodeDetail({
   // the same URL still sitting in the box — editing it should clear the offer, not carry it over.
   const canForceAdd = Boolean(addError) && !adding && draftLooksLikeAUrl && node.type !== "DECISION";
 
-  const hint = attempt.open
-    ? `${ticked} of ${rubric.length} marked`
-    : gated
-      ? `shut · chapter ${numeral(chapterIndex, arabic)} is not yet open`
-      : node.status === "locked"
-        ? "locked · prerequisites outstanding"
+  const hint = gated
+    ? `shut · chapter ${numeral(chapterIndex, arabic)} is not yet open`
+    : node.status === "locked"
+      ? "locked · prerequisites outstanding"
+      : mastery && mastery.quizzes > 0
+        ? `${mastery.quizzes} taken`
         : check
           ? `evidence: ${check.evidence}`
           : "";
@@ -203,97 +260,49 @@ export function NodeDetail({
 
       {check && (
         <section className="check">
-          <h3 className="sect__h">Exit check</h3>
-          <p className="check__lede">You will know you have it when —</p>
+          <h3 className="sect__h">Test your knowledge</h3>
 
-          <ul className="check__list">
-            {rubric.map((text, i) => (
-              <li key={i} className="check__item">
-                <button
-                  className={[
-                    "check__box",
-                    attempt.open ? "is-live" : "",
-                    attempt.ticks[i] ? "is-ticked" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  title="mark satisfied"
-                  onClick={() => toggleTick(i)}
-                >
-                  {attempt.ticks[i] ? "✓" : ""}
-                </button>
-                <span style={{ color: attempt.ticks[i] ? C("--at-dim") : C("--at-ink") }}>
-                  {text}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <p className="check__prompt">{check.prompt}</p>
-
-          {attempt.open && (
+          {quiz ? (
+            <Quiz
+              questions={quiz.questions}
+              results={quiz.results}
+              marking={quiz.marking}
+              onSubmit={(answers) => onSubmitQuiz?.(node.id, answers)}
+              onClose={() => onCloseQuiz?.()}
+              onRetake={() => onTakeQuiz?.(node.id)}
+            />
+          ) : (
             <>
-              <label className="intake__label">Your account of it</label>
-              <textarea
-                className="ta"
-                rows={6}
-                placeholder="Write it out, or paste what you built."
-                value={attempt.text}
-                onChange={(e) => patch({ text: e.target.value })}
-              />
+              <p className="check__lede">
+                {mastery && mastery.quizzes > 0
+                  ? "Atlas remembers where you slipped. The next quiz leans on those."
+                  : "A short quiz, written for this card. Atlas marks it and remembers what to drill."}
+              </p>
+
+              {mastery && mastery.concepts.length > 0 && (
+                <MasterySummary mastery={mastery} />
+              )}
+
+              <div className="check__actions">
+                <button className="btn" disabled={barred || quizLoading} onClick={() => onTakeQuiz?.(node.id)}>
+                  {quizLoading ? "Writing the quiz…" : mastery && mastery.quizzes > 0 ? "Take another quiz" : "Take a quiz"}
+                </button>
+                <span className="check__hint tnum">{hint}</span>
+              </div>
+
+              {quizError && <p className="res__error">{quizError}</p>}
+
+              <details className="check__spec">
+                <summary>What this card is checking</summary>
+                <ul className="check__speclist">
+                  {rubric.map((text, i) => (
+                    <li key={i}>{text}</li>
+                  ))}
+                </ul>
+                <p className="check__prompt">{check.prompt}</p>
+              </details>
             </>
           )}
-
-          {attempt.verdict && (
-            <div
-              className="check__verdict"
-              style={{
-                borderColor: attempt.verdict === "passed" ? C("--at-passed") : C("--at-progress"),
-                color: attempt.verdict === "passed" ? C("--at-passed") : C("--at-progress"),
-              }}
-            >
-              <div className="check__verdict-h">
-                {attempt.verdict === "passed" ? "Marked · passed" : "Marked · short of it"}
-              </div>
-              <div className="check__verdict-b">
-                {attempt.verdict === "passed"
-                  ? "All criteria met. The units downstream open, and if this was the last unit of the chapter its seal is set."
-                  : "Some criteria are unmet. Atlas will read your account and, if the gap is local, insert a recovery beside this unit rather than a new prerequisite."}
-              </div>
-            </div>
-          )}
-
-          <div className="check__actions">
-            <button
-              className="btn"
-              disabled={barred}
-              onClick={() => {
-                if (barred) return;
-                if (!attempt.open || attempt.verdict) {
-                  patch({ open: true, verdict: null });
-                  return;
-                }
-                patch({
-                  verdict: ticked === rubric.length && rubric.length > 0 ? "passed" : "short",
-                });
-              }}
-            >
-              {attempt.verdict
-                ? "Attempt again"
-                : attempt.open
-                  ? "Submit for marking"
-                  : "Attempt the check"}
-            </button>
-            {attempt.open && (
-              <button
-                className="btn btn--quiet"
-                onClick={() => patch({ open: false, verdict: null })}
-              >
-                Set aside
-              </button>
-            )}
-            <span className="check__hint tnum">{hint}</span>
-          </div>
         </section>
       )}
 

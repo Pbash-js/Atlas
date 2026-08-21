@@ -1692,3 +1692,226 @@ button {
 .linkbtn-inline:hover {
   color: var(--at-gold-lift);
 }
+
+/* ── mastery + quiz ────────────────────────────────────────────────────── */
+
+.mastery {
+  margin: 14px 0 16px;
+}
+
+.mastery__bar {
+  position: relative;
+  height: 6px;
+  border: 1px solid var(--at-rule);
+  overflow: hidden;
+}
+
+.mastery__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--at-gold);
+  transition: width 0.4s ease;
+}
+
+.mastery__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--at-faint);
+}
+
+.mastery__group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.mastery__label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+
+.mastery__chip {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border: 1px solid var(--at-rule);
+  border-radius: var(--radius-sm);
+  color: var(--at-dim);
+}
+.mastery__chip.is-weak {
+  border-color: color-mix(in srgb, var(--at-failed) 45%, transparent);
+  color: var(--at-failed);
+}
+.mastery__chip.is-strong {
+  border-color: color-mix(in srgb, var(--at-passed) 45%, transparent);
+  color: var(--at-passed);
+}
+
+.check__spec {
+  margin-top: 16px;
+  border-top: 1px solid var(--at-rule-soft);
+  padding-top: 12px;
+}
+
+.check__spec summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--at-faint);
+  list-style: none;
+}
+.check__spec summary::-webkit-details-marker {
+  display: none;
+}
+.check__spec summary::before {
+  content: "▸ ";
+  color: var(--at-gold);
+}
+.check__spec[open] summary::before {
+  content: "▾ ";
+}
+.check__spec summary:hover {
+  color: var(--at-ink);
+}
+
+.check__speclist {
+  margin: 10px 0 12px;
+  padding-left: 18px;
+  color: var(--at-dim);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.check__speclist li {
+  margin-bottom: 5px;
+}
+
+.quiz__list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.quiz__item {
+  padding: 14px 0;
+  border-top: 1px solid var(--at-rule-soft);
+}
+
+.quiz__item-top,
+.quiz__result-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 7px;
+}
+
+.quiz__num {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--at-gold);
+}
+
+.quiz__concept {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--at-faint);
+}
+
+.quiz__q {
+  margin: 0 0 10px;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--at-ink);
+}
+
+.quiz__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quiz__opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid var(--at-rule);
+  border-radius: var(--radius-md);
+  background: var(--at-raised);
+  cursor: pointer;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--at-dim);
+}
+.quiz__opt:hover {
+  border-color: var(--at-gold);
+  color: var(--at-ink);
+}
+.quiz__opt.is-picked {
+  border-color: var(--at-gold);
+  background: var(--at-gold-ghost);
+  color: var(--at-ink);
+}
+.quiz__opt input {
+  margin-top: 3px;
+  accent-color: var(--at-gold);
+}
+
+.quiz__verdict {
+  border: 1px solid var(--at-rule);
+  border-left-width: 3px;
+  background: var(--at-raised);
+  padding: 13px 15px;
+  margin-bottom: 16px;
+}
+
+.quiz__verdict-h {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.quiz__verdict-b {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--at-dim);
+}
+
+.quiz__results {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.quiz__result {
+  padding: 12px 0;
+  border-top: 1px solid var(--at-rule-soft);
+}
+
+.quiz__mark {
+  font-size: 12px;
+}
+.quiz__result.is-ok .quiz__mark {
+  color: var(--at-passed);
+}
+.quiz__result.is-bad .quiz__mark {
+  color: var(--at-failed);
+}
+
+.quiz__fb {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--at-dim);
+  font-style: italic;
+}

@@ -13,6 +13,7 @@ import {
   listPlans,
   savePlan,
   seedOnce,
+  markPassed,
   setNodeResources,
   touchPlan,
   type StoredPlan,
@@ -26,6 +27,16 @@ import { GeminiModel } from "./llm/model";
 import { isHttpUrl, isReachable, titleFromUrl } from "./resources/verify";
 import { fmt } from "./lib/format";
 import { noticeId, NOTICE_TTL_MS, type Notice } from "./lib/notice";
+import type { QuizState } from "./panel/NodeDetail";
+import { generateQuiz, assess } from "./llm/examiner";
+import { PASS_RATIO } from "./quiz/types";
+import {
+  applyResults,
+  chooseFocus,
+  emptyMastery,
+  getMasteryStore,
+  type NodeMastery,
+} from "./quiz/mastery";
 
 type Screen = "home" | "plan" | "chronicle" | "intake" | "generating";
 type Ground = "dark" | "soft";
@@ -70,6 +81,14 @@ export default function App() {
 
   const [notices, setNotices] = useState<Notice[]>([]);
   const [acting, setActing] = useState(false);
+
+  const [quiz, setQuiz] = useState<QuizState | null>(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [mastery, setMastery] = useState<NodeMastery | null>(null);
+
+  /** How many questions a quiz asks. Short enough to actually finish in one sitting. */
+  const QUIZ_LENGTH = 5;
 
   const [phase, setPhase] = useState<Phase | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
@@ -332,6 +351,88 @@ export default function App() {
     [current, acting, lastInput, selectedId, settleNotice],
   );
 
+  // Mastery is per card, so it reloads whenever the selection moves — through the store
+  // interface, never localStorage directly, so an injected store is picked up here for free.
+  useEffect(() => {
+    let live = true;
+    if (!selectedId) {
+      setMastery(null);
+      return;
+    }
+    void getMasteryStore()
+      .load(selectedId)
+      .then((m) => {
+        if (live) setMastery(m ?? emptyMastery(selectedId));
+      });
+    return () => {
+      live = false;
+    };
+  }, [selectedId, quiz]);
+
+  const handleTakeQuiz = useCallback(
+    async (nodeId: string) => {
+      const plan = current;
+      const target = plan?.graph.nodes.find((n) => n.id === nodeId);
+      if (!plan || !target || target.type === "DECISION") return;
+
+      setQuizError(null);
+      setQuizLoading(true);
+      try {
+        const existing = (await getMasteryStore().load(nodeId)) ?? emptyMastery(nodeId);
+        const focus = chooseFocus(existing, QUIZ_LENGTH);
+        const questions = await generateQuiz(model, {
+          node: target,
+          goalStatement: plan.graph.goal.statement,
+          mastery: existing,
+          focus,
+          count: QUIZ_LENGTH,
+        });
+        setQuiz({ nodeId, questions, results: null, marking: false });
+      } catch (err) {
+        setQuizError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setQuizLoading(false);
+      }
+    },
+    [current],
+  );
+
+  const handleSubmitQuiz = useCallback(
+    async (nodeId: string, answers: Record<string, string>) => {
+      const plan = current;
+      if (!plan || !quiz || quiz.nodeId !== nodeId) return;
+
+      setQuiz({ ...quiz, marking: true });
+      try {
+        const results = await assess(model, quiz.questions, answers);
+
+        // Record what was learned about each concept before anything else, so a failure to
+        // update the card's status cannot cost the learner their mastery history.
+        const store = getMasteryStore();
+        const existing = (await store.load(nodeId)) ?? emptyMastery(nodeId);
+        const updated = applyResults(
+          existing,
+          results.map((r) => ({ concept: r.question.concept, correct: r.correct })),
+        );
+        await store.save(updated);
+        setMastery(updated);
+        setQuiz({ nodeId, questions: quiz.questions, results, marking: false });
+
+        const ratio = results.filter((r) => r.correct).length / (results.length || 1);
+        const node = plan.graph.nodes.find((n) => n.id === nodeId);
+        if (ratio >= PASS_RATIO && node && node.status !== "passed") {
+          const graded = markPassed(plan.graph, nodeId);
+          savePlan(graded);
+          setPlans(listPlans());
+        }
+      } catch (err) {
+        setQuiz({ ...quiz, marking: false });
+        setQuizError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [current, quiz],
+  );
+
   const cancelDraw = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -463,6 +564,13 @@ export default function App() {
                 onAddResourceForced={handleAddResourceForced}
                 addingId={addingId}
                 addError={addError}
+                onTakeQuiz={handleTakeQuiz}
+                onSubmitQuiz={handleSubmitQuiz}
+                onCloseQuiz={() => setQuiz(null)}
+                quiz={quiz}
+                quizLoading={quizLoading}
+                quizError={quizError}
+                mastery={mastery}
               />
             </>
           ) : (

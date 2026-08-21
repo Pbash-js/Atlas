@@ -1,6 +1,7 @@
 import type { AtlasGraph, Resource } from "../schema/atlas";
 import { validateGraph } from "../schema/validate";
 import { urlKey } from "../resources/verify";
+import { recomputeStatuses } from "../graph/mutate";
 import golden from "../../fixtures/golden-bs-streaming.json";
 
 /**
@@ -133,6 +134,29 @@ export function addManualResource(graph: AtlasGraph, nodeId: string, resource: R
 
   savePlan(next);
   return next;
+}
+
+/**
+ * Mark a card passed after a quiz cleared the bar, and reopen whatever it unlocked.
+ *
+ * Status recomputation runs through the same function the patch layer uses, so passing a card by
+ * quiz and passing it by any future route open downstream cards by identical rules.
+ */
+export function markPassed(graph: AtlasGraph, nodeId: string): AtlasGraph {
+  const next: AtlasGraph = {
+    ...graph,
+    nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, status: "passed" as const } : n)),
+    events: [
+      ...graph.events,
+      {
+        at: new Date().toISOString(),
+        type: "passed" as const,
+        node: nodeId,
+        detail: "quiz cleared the bar",
+      },
+    ],
+  };
+  return recomputeStatuses(next);
 }
 
 export function touchPlan(id: string) {
